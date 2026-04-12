@@ -1,0 +1,286 @@
+import { Octokit } from '@octokit/rest';
+import * as core from '@actions/core';
+import { Finding, ParsedDiff, Severity } from '../types';
+import { findDiffPosition } from './diff-parser';
+
+const SEVERITY_TAGS: Record<Severity, string> = {
+  critical: '\uD83D\uDED1 Critical',
+  high: '\uD83D\uDD34 High',
+  medium: '\uD83D\uDFE1 Medium',
+  low: '\uD83D\uDFE2 Low',
+  nit: '\uD83D\uDCAC Nit',
+};
+
+interface ReviewComment {
+  path: string;
+  line: number;
+  side: 'RIGHT';
+  body: string;
+}
+
+export class InlineReviewer {
+  constructor(
+    private octokit: Octokit,
+    private owner: string,
+    private repo: string,
+    private prNumber: number,
+  ) {}
+
+  async postReview(
+    findings: Finding[],
+    headSha: string,
+    parsedDiffs: ParsedDiff[],
+  ): Promise<number> {
+    // Fetch existing open inline comments from previous runs to avoid duplicates
+    const existingComments = await this.fetchExistingInlineComments();
+
+    const comments: ReviewComment[] = [];
+
+    for (const finding of findings) {
+      if (!finding.file || !finding.line) continue;
+
+      // Verify the line exists in the diff (so GitHub won't reject it)
+      const position = findDiffPosition(parsedDiffs, finding.file, finding.line);
+      if (position === null) {
+        // Try nearby lines (AI might be off by 1-2 lines)
+        const nearbyLine = this.findNearbyDiffLine(parsedDiffs, finding.file, finding.line);
+        if (nearbyLine === null) {
+          core.debug(
+            `Skipping inline comment: ${finding.file}:${finding.line} not found in diff`,
+          );
+          continue;
+        }
+        finding.line = nearbyLine;
+      }
+
+      // Skip if an identical open comment already exists from a previous run
+      if (this.isDuplicateOfExisting(finding, existingComments)) {
+        core.debug(
+          `Skipping duplicate inline comment: ${finding.file}:${finding.line} "${finding.title}" — already exists`,
+        );
+        continue;
+      }
+
+      // Validate code suggestion against actual line content
+      this.validateCodeSuggestion(finding, parsedDiffs);
+
+      const body = this.formatCommentBody(finding);
+      comments.push({
+        path: finding.file,
+        line: finding.line,
+        side: 'RIGHT',
+        body,
+      });
+    }
+
+    if (comments.length === 0) {
+      return 0;
+    }
+
+    try {
+      await this.octokit.pulls.createReview({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: this.prNumber,
+        commit_id: headSha,
+        event: 'COMMENT',
+        comments: comments as any, // Octokit types don't include line+side yet
+      });
+
+      return comments.length;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      core.warning(`Failed to post inline review: ${message}`);
+
+      // If batch fails, try posting comments individually
+      return this.postCommentsIndividually(headSha, comments);
+    }
+  }
+
+  /**
+   * Fetches existing unresolved inline review comments authored by our bot
+   * on this PR. Used to avoid posting duplicate comments on re-triggers.
+   */
+  private async fetchExistingInlineComments(): Promise<Array<{ path: string; line: number; body: string }>> {
+    try {
+      // Get the authenticated user (usually github-actions[bot])
+      let botLogin = 'github-actions[bot]';
+      try {
+        const { data } = await this.octokit.users.getAuthenticated();
+        botLogin = data.login;
+      } catch {
+        // Default to github-actions[bot]
+      }
+
+      const { data: reviews } = await this.octokit.pulls.listReviewComments({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: this.prNumber,
+        per_page: 100,
+      });
+
+      return reviews
+        .filter(c => c.user?.login === botLogin)
+        .map(c => ({
+          path: c.path,
+          line: c.line ?? c.original_line ?? 0,
+          body: c.body,
+        }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      core.debug(`Failed to fetch existing inline comments: ${msg}`);
+      return [];
+    }
+  }
+
+  /**
+   * Checks if a finding already has an open inline comment from a previous run
+   * at the same file+line with a similar title/content.
+   */
+  private isDuplicateOfExisting(
+    finding: Finding,
+    existing: Array<{ path: string; line: number; body: string }>,
+  ): boolean {
+    const titleLower = finding.title.toLowerCase();
+    return existing.some(c => {
+      if (c.path !== finding.file) return false;
+      if (Math.abs(c.line - finding.line) > 2) return false;
+      // Check if the existing comment body contains this finding's title
+      return c.body.toLowerCase().includes(titleLower);
+    });
+  }
+
+  /**
+   * Validates that a code suggestion is meaningful — not a no-op and not
+   * replacing the wrong content. Strips invalid suggestions so the finding
+   * is still posted as a comment without a broken suggestion block.
+   */
+  private validateCodeSuggestion(finding: Finding, parsedDiffs: ParsedDiff[]): void {
+    if (!finding.codeSuggestion) return;
+
+    const originalLine = this.getOriginalLineContent(parsedDiffs, finding.file, finding.line);
+    if (!originalLine) return; // Can't validate without original content
+
+    const originalTrimmed = originalLine.trim();
+    const suggestionTrimmed = finding.codeSuggestion.trim();
+
+    // No-op check: suggestion is identical to original line
+    if (originalTrimmed === suggestionTrimmed) {
+      core.debug(
+        `Dropping no-op code suggestion on ${finding.file}:${finding.line} — identical to original`,
+      );
+      finding.codeSuggestion = undefined;
+      return;
+    }
+
+    // Structural mismatch: suggestion contains completely unrelated content
+    // (e.g., suggesting a checkout step on an angular_prompt_append line)
+    // Heuristic: if suggestion has zero words in common with original, it's likely wrong
+    const originalWords = new Set(originalTrimmed.toLowerCase().split(/[\s:_\-./]+/).filter(w => w.length > 2));
+    const suggestionWords = new Set(suggestionTrimmed.toLowerCase().split(/[\s:_\-./]+/).filter(w => w.length > 2));
+    let commonWords = 0;
+    for (const word of originalWords) {
+      if (suggestionWords.has(word)) commonWords++;
+    }
+
+    // If original line has meaningful words but suggestion shares NONE, likely wrong line
+    if (originalWords.size >= 2 && commonWords === 0) {
+      core.debug(
+        `Dropping mismatched code suggestion on ${finding.file}:${finding.line} — suggestion content doesn't match original line`,
+      );
+      finding.codeSuggestion = undefined;
+    }
+  }
+
+  /**
+   * Extracts the content of a specific line from parsed diffs.
+   */
+  private getOriginalLineContent(
+    parsedDiffs: ParsedDiff[],
+    filename: string,
+    lineNumber: number,
+  ): string | null {
+    const fileDiff = parsedDiffs.find(d => d.filename === filename);
+    if (!fileDiff) return null;
+
+    for (const hunk of fileDiff.hunks) {
+      for (const line of hunk.lines) {
+        if (line.newLineNumber === lineNumber && (line.type === 'add' || line.type === 'context')) {
+          return line.content;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * If a finding's line number isn't exactly in the diff, search nearby lines
+   * (within +/- 3) that ARE in the diff. Returns the nearest valid line or null.
+   */
+  private findNearbyDiffLine(
+    parsedDiffs: ParsedDiff[],
+    filename: string,
+    targetLine: number,
+  ): number | null {
+    for (let offset = 1; offset <= 3; offset++) {
+      if (findDiffPosition(parsedDiffs, filename, targetLine + offset) !== null) {
+        return targetLine + offset;
+      }
+      if (findDiffPosition(parsedDiffs, filename, targetLine - offset) !== null) {
+        return targetLine - offset;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Fall back to posting each comment individually. If one fails (e.g., line
+   * not in diff), the others can still succeed.
+   */
+  private async postCommentsIndividually(
+    headSha: string,
+    comments: ReviewComment[],
+  ): Promise<number> {
+    let posted = 0;
+    for (const comment of comments) {
+      try {
+        await this.octokit.pulls.createReview({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: this.prNumber,
+          commit_id: headSha,
+          event: 'COMMENT',
+          comments: [comment as any],
+        });
+        posted++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        core.debug(`Failed to post comment on ${comment.path}:${comment.line}: ${msg}`);
+      }
+    }
+    return posted;
+  }
+
+  private formatCommentBody(finding: Finding): string {
+    const severityTag = SEVERITY_TAGS[finding.severity];
+    const parts: string[] = [];
+
+    parts.push(`**${severityTag}:** ${finding.title}`);
+    parts.push('');
+    parts.push(finding.description);
+
+    if (finding.suggestion) {
+      parts.push('');
+      parts.push(finding.suggestion);
+    }
+
+    if (finding.codeSuggestion) {
+      parts.push('');
+      parts.push('```suggestion');
+      parts.push(finding.codeSuggestion);
+      parts.push('```');
+    }
+
+    return parts.join('\n');
+  }
+}

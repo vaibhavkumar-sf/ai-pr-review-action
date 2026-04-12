@@ -1,0 +1,40 @@
+{
+  "name": "ai-pr-review-action",
+  "version": "1.0.0",
+  "description": "Comprehensive AI-powered code review for TypeScript/Angular/LoopBack4 projects",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch",
+    "lint": "eslint src/ --ext .ts",
+    "lint:fix": "eslint src/ --ext .ts --fix",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sourcefuse/ai-pr-review-action.git"
+  },
+  "author": "SourceFuse",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@octokit/rest": "^21.1.1",
+    "minimatch": "^10.2.5"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.19.39",
+    "@typescript-eslint/eslint-plugin": "^8.58.1",
+    "@typescript-eslint/parser": "^8.58.1",
+    "eslint": "^9.39.4",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

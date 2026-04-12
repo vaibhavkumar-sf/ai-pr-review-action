@@ -1,0 +1,31 @@
+# Angular project — strict review with Angular-specific rules
+name: AI Code Review (Angular)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: sourcefuse/ai-pr-review-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          review_profile: 'strict'
+          framework: 'angular'
+          angular_prompt_append: |
+            Additional Angular rules for our project:
+            - We use NgRx for state management — check for proper action/reducer/effect patterns
+            - All components must use OnPush change detection strategy
+            - Services must be provided in root unless there is a specific reason not to
+            - Use trackBy in all *ngFor directives
+            - Prefer standalone components over NgModule-based components
+          jira_url: ${{ secrets.JIRA_URL }}
+          jira_email: ${{ secrets.JIRA_EMAIL }}
+          jira_api_token: ${{ secrets.JIRA_TOKEN }}

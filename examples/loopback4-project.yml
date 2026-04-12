@@ -1,0 +1,34 @@
+# LoopBack4 project — strict review with LB4-specific rules
+name: AI Code Review (LoopBack4)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: sourcefuse/ai-pr-review-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          review_profile: 'strict'
+          framework: 'loopback4'
+          loopback4_prompt_append: |
+            Additional LoopBack4 rules for our project:
+            - All models must extend SoftDeleteEntity (soft-delete mixin)
+            - All repositories must use SoftCrudRepository
+            - Controllers must use @authenticate('bearer') decorator
+            - Use @authorize() for RBAC on all endpoints
+            - All @model() decorators must include description
+            - All @property() decorators must include description
+            - Business logic must be in services, never in controllers or repositories
+            - Use HttpErrors from @loopback/rest, never plain Error
+          jira_url: ${{ secrets.JIRA_URL }}
+          jira_email: ${{ secrets.JIRA_EMAIL }}
+          jira_api_token: ${{ secrets.JIRA_TOKEN }}

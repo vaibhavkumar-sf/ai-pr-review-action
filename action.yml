@@ -1,0 +1,237 @@
+name: 'AI PR Review Action'
+description: 'Comprehensive AI-powered code review for TypeScript/Angular/LoopBack4 projects with parallel specialist agents'
+author: 'SourceFuse'
+
+branding:
+  icon: 'eye'
+  color: 'blue'
+
+inputs:
+  # ─── Required ────────────────────────────────────────────
+  github_token:
+    description: 'GitHub token for PR access (usually secrets.GITHUB_TOKEN)'
+    required: true
+  anthropic_auth_token:
+    description: 'API key for Anthropic, OpenRouter, GLM, or any compatible provider'
+    required: true
+
+  # ─── Provider Configuration ──────────────────────────────
+  anthropic_base_url:
+    description: 'Base URL for the AI API. Change for OpenRouter, GLM, or custom endpoints'
+    required: false
+    default: 'https://api.anthropic.com'
+  anthropic_model:
+    description: 'Model ID to use for reviews'
+    required: false
+    default: 'claude-opus-4-6-20250610'
+  max_tokens:
+    description: 'Maximum tokens per AI response'
+    required: false
+    default: '8192'
+  temperature:
+    description: 'AI temperature (0.0 - 1.0)'
+    required: false
+    default: '0.2'
+
+  # ─── Review Profile ─────────────────────────────────────
+  review_profile:
+    description: 'Review intensity: strict (all 7 agents), standard (5 agents), minimal (2 agents)'
+    required: false
+    default: 'standard'
+
+  # ─── Individual Review Toggles (override profile) ────────
+  enable_security_review:
+    description: 'Enable/disable security review agent (overrides profile)'
+    required: false
+    default: ''
+  enable_code_quality_review:
+    description: 'Enable/disable code quality review agent (overrides profile)'
+    required: false
+    default: ''
+  enable_performance_review:
+    description: 'Enable/disable performance review agent (overrides profile)'
+    required: false
+    default: ''
+  enable_type_safety_review:
+    description: 'Enable/disable type safety & documentation review agent (overrides profile)'
+    required: false
+    default: ''
+  enable_architecture_review:
+    description: 'Enable/disable architecture review agent (overrides profile)'
+    required: false
+    default: ''
+  enable_testing_review:
+    description: 'Enable/disable testing review agent (overrides profile)'
+    required: false
+    default: ''
+  enable_api_design_review:
+    description: 'Enable/disable API design review agent (overrides profile)'
+    required: false
+    default: ''
+
+  # ─── Framework Configuration ─────────────────────────────
+  framework:
+    description: 'Framework: angular, loopback4, both, auto (auto-detect from repo)'
+    required: false
+    default: 'auto'
+
+  # ─── JIRA Integration (optional, fault-tolerant) ────────
+  jira_url:
+    description: 'JIRA instance URL (e.g., https://company.atlassian.net)'
+    required: false
+    default: ''
+  jira_email:
+    description: 'JIRA user email for API authentication'
+    required: false
+    default: ''
+  jira_api_token:
+    description: 'JIRA API token'
+    required: false
+    default: ''
+  jira_project_key:
+    description: 'JIRA project key for ticket validation (e.g., PLM, PROJ)'
+    required: false
+    default: ''
+
+  # ─── Behavior Flags ─────────────────────────────────────
+  fail_on_critical:
+    description: 'Fail the action (exit code 1) when critical severity findings exist'
+    required: false
+    default: 'false'
+  fail_threshold:
+    description: 'Minimum severity to fail: critical, high, medium'
+    required: false
+    default: 'critical'
+  post_inline_comments:
+    description: 'Post inline review comments on specific diff lines'
+    required: false
+    default: 'true'
+  max_files_to_review:
+    description: 'Skip review if PR has more changed files than this'
+    required: false
+    default: '50'
+  exclude_patterns:
+    description: 'Comma-separated glob patterns to exclude (appended to built-in defaults: package-lock, openapi.json, migrations, .bpmn, dist, node_modules, .d.ts, etc.)'
+    required: false
+    default: ''
+  include_patterns:
+    description: 'Comma-separated glob patterns to include (if set, only these are reviewed)'
+    required: false
+    default: ''
+
+  # ─── Prompt Customization ───────────────────────────────
+  system_prompt_override:
+    description: 'Full replacement of the default system prompt (replaces all built-in prompts)'
+    required: false
+    default: ''
+  system_prompt_append:
+    description: 'Text appended to the default system prompt (adds to built-in prompts)'
+    required: false
+    default: ''
+  angular_prompt_append:
+    description: 'Additional instructions appended for Angular-specific reviews'
+    required: false
+    default: ''
+  loopback4_prompt_append:
+    description: 'Additional instructions appended for LoopBack4-specific reviews'
+    required: false
+    default: ''
+
+  # ─── Comment Configuration ──────────────────────────────
+  comment_header:
+    description: 'Custom header for the review summary comment'
+    required: false
+    default: 'AI Code Review'
+  comment_footer:
+    description: 'Custom footer text for the review summary comment'
+    required: false
+    default: ''
+
+  # ─── Diagrams ──────────────────────────────────────────
+  enable_diagrams:
+    description: 'Generate rendered diagram images (D2 via Kroki.io + Mermaid via mermaid.ink) in PR description'
+    required: false
+    default: 'true'
+
+  # ─── Advanced ───────────────────────────────────────────
+  agent_timeout:
+    description: 'Timeout in seconds for each review agent AI call'
+    required: false
+    default: '120'
+  max_retries:
+    description: 'Maximum retries per agent on AI API failure'
+    required: false
+    default: '3'
+  debug:
+    description: 'Enable debug logging'
+    required: false
+    default: 'false'
+
+outputs:
+  review_status:
+    description: 'Review status: completed, skipped'
+  skip_reason:
+    description: 'Reason for skipping: too_many_files, no_agents (empty if not skipped)'
+  review_comment_id:
+    description: 'ID of the review summary comment posted on the PR'
+  review_comment_url:
+    description: 'URL of the review summary comment'
+  total_findings:
+    description: 'Total number of findings across all agents'
+  critical_count:
+    description: 'Number of critical severity findings'
+  high_count:
+    description: 'Number of high severity findings'
+  medium_count:
+    description: 'Number of medium severity findings'
+  low_count:
+    description: 'Number of low severity findings'
+  nit_count:
+    description: 'Number of nit severity findings'
+  review_passed:
+    description: 'Whether the review passed (no findings at or above fail_threshold)'
+  agents_run:
+    description: 'Comma-separated list of agents that ran'
+  agents_failed:
+    description: 'Comma-separated list of agents that failed (if any)'
+  duration_seconds:
+    description: 'Total review duration in seconds'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  env:
+    GITHUB_TOKEN: ${{ inputs.github_token }}
+    INPUT_ANTHROPIC_AUTH_TOKEN: ${{ inputs.anthropic_auth_token }}
+    INPUT_ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+    INPUT_ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
+    INPUT_MAX_TOKENS: ${{ inputs.max_tokens }}
+    INPUT_TEMPERATURE: ${{ inputs.temperature }}
+    INPUT_REVIEW_PROFILE: ${{ inputs.review_profile }}
+    INPUT_ENABLE_SECURITY_REVIEW: ${{ inputs.enable_security_review }}
+    INPUT_ENABLE_CODE_QUALITY_REVIEW: ${{ inputs.enable_code_quality_review }}
+    INPUT_ENABLE_PERFORMANCE_REVIEW: ${{ inputs.enable_performance_review }}
+    INPUT_ENABLE_TYPE_SAFETY_REVIEW: ${{ inputs.enable_type_safety_review }}
+    INPUT_ENABLE_ARCHITECTURE_REVIEW: ${{ inputs.enable_architecture_review }}
+    INPUT_ENABLE_TESTING_REVIEW: ${{ inputs.enable_testing_review }}
+    INPUT_ENABLE_API_DESIGN_REVIEW: ${{ inputs.enable_api_design_review }}
+    INPUT_FRAMEWORK: ${{ inputs.framework }}
+    INPUT_JIRA_URL: ${{ inputs.jira_url }}
+    INPUT_JIRA_EMAIL: ${{ inputs.jira_email }}
+    INPUT_JIRA_API_TOKEN: ${{ inputs.jira_api_token }}
+    INPUT_JIRA_PROJECT_KEY: ${{ inputs.jira_project_key }}
+    INPUT_FAIL_ON_CRITICAL: ${{ inputs.fail_on_critical }}
+    INPUT_FAIL_THRESHOLD: ${{ inputs.fail_threshold }}
+    INPUT_POST_INLINE_COMMENTS: ${{ inputs.post_inline_comments }}
+    INPUT_MAX_FILES_TO_REVIEW: ${{ inputs.max_files_to_review }}
+    INPUT_EXCLUDE_PATTERNS: ${{ inputs.exclude_patterns }}
+    INPUT_INCLUDE_PATTERNS: ${{ inputs.include_patterns }}
+    INPUT_SYSTEM_PROMPT_OVERRIDE: ${{ inputs.system_prompt_override }}
+    INPUT_SYSTEM_PROMPT_APPEND: ${{ inputs.system_prompt_append }}
+    INPUT_ANGULAR_PROMPT_APPEND: ${{ inputs.angular_prompt_append }}
+    INPUT_LOOPBACK4_PROMPT_APPEND: ${{ inputs.loopback4_prompt_append }}
+    INPUT_COMMENT_HEADER: ${{ inputs.comment_header }}
+    INPUT_COMMENT_FOOTER: ${{ inputs.comment_footer }}
+    INPUT_AGENT_TIMEOUT: ${{ inputs.agent_timeout }}
+    INPUT_MAX_RETRIES: ${{ inputs.max_retries }}
+    INPUT_DEBUG: ${{ inputs.debug }}

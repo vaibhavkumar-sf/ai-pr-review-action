@@ -1,0 +1,72 @@
+# Full configuration — all options shown
+name: AI Code Review (Full Config)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: sourcefuse/ai-pr-review-action@v1
+        with:
+          # ─── Required ─────────────────────────────────────
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+
+          # ─── Provider (uses same secrets as ai-test-quality-analyzer) ──
+          anthropic_base_url: ${{ secrets.ANTHROPIC_BASE_URL }}
+          anthropic_model: 'claude-sonnet-4-20250514'
+          max_tokens: '8192'
+          temperature: '0.2'
+
+          # ─── Review Profile ───────────────────────────────
+          # strict: all 7 agents | standard: 5 agents | minimal: 2 agents
+          review_profile: 'strict'
+
+          # ─── Individual Review Toggles (override profile) ─
+          # Set 'true' or 'false' to override the profile default
+          # enable_security_review: 'true'
+          # enable_code_quality_review: 'true'
+          # enable_performance_review: 'true'
+          # enable_type_safety_review: 'true'
+          # enable_architecture_review: 'true'
+          # enable_testing_review: 'true'
+          # enable_api_design_review: 'true'
+
+          # ─── Framework ────────────────────────────────────
+          # auto | angular | loopback4 | both
+          framework: 'auto'
+
+          # ─── JIRA (optional, fault-tolerant) ──────────────
+          # Uses same org-level secrets as ai-test-quality-analyzer
+          jira_url: ${{ secrets.JIRA_URL }}
+          jira_email: ${{ secrets.JIRA_EMAIL }}
+          jira_api_token: ${{ secrets.JIRA_TOKEN }}
+          jira_project_key: 'PLM'
+
+          # ─── Behavior ────────────────────────────────────
+          fail_on_critical: 'false'
+          fail_threshold: 'critical'
+          post_inline_comments: 'true'
+          max_files_to_review: '50'
+          exclude_patterns: '**/package-lock.json,**/yarn.lock,**/*.bpmn,**/openapi.json,**/dist/**'
+
+          # ─── Prompt Customization ─────────────────────────
+          # system_prompt_override: ''  # Full replacement
+          system_prompt_append: 'Pay special attention to our custom error handling patterns.'
+          angular_prompt_append: 'We use NgRx for state management. Check for proper action/reducer patterns.'
+          loopback4_prompt_append: 'We use soft-delete mixin. Check that delete operations use soft delete.'
+
+          # ─── Comment ──────────────────────────────────────
+          comment_header: 'AI Code Review'
+
+          # ─── Advanced ─────────────────────────────────────
+          agent_timeout: '120'
+          max_retries: '3'
+          debug: 'false'

@@ -1,0 +1,20 @@
+# Basic usage — drop this into .github/workflows/ai-code-review.yml
+# Only requires 2 secrets: GITHUB_TOKEN (auto-provided) and ANTHROPIC_AUTH_TOKEN
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: sourcefuse/ai-pr-review-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
