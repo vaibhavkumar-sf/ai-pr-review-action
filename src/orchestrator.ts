@@ -266,7 +266,7 @@ async function appendToPRDescription(
         { role: 'system', content: descriptionPrompt.system },
         { role: 'user', content: descriptionPrompt.user },
       ],
-      { maxTokens: 4096, temperature: 0.3, timeout: 60000 },
+      { maxTokens: 4096, temperature: 0.3, timeout: 120000 },
     );
     aiGeneratedContent = sanitizeMermaid(response.content);
   } catch (err) {
