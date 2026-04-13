@@ -88,7 +88,25 @@ export class AnthropicProvider implements AIProvider {
         }
 
         if (this.isRetryableError(error) && attempt < this.maxRetries) {
-          const delayMs = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+          const isRateLimit = error instanceof Anthropic.APIError && error.status === 429;
+
+          // Check for Retry-After header from Anthropic
+          let retryAfterMs = 0;
+          if (error instanceof Anthropic.APIError && error.headers) {
+            const retryAfter = error.headers['retry-after'];
+            if (retryAfter) {
+              retryAfterMs = parseInt(retryAfter, 10) * 1000;
+            }
+          }
+
+          // Rate limit (429): use Retry-After header, or 30s, 60s, 90s, 120s
+          // Other transient errors: 2s, 4s, 8s
+          const delayMs = retryAfterMs > 0
+            ? retryAfterMs
+            : isRateLimit
+              ? (attempt + 1) * 30000
+              : Math.pow(2, attempt + 1) * 1000;
+          core.info(`Retrying in ${delayMs / 1000}s (attempt ${attempt + 1}/${this.maxRetries})${isRateLimit ? ' — rate limited' : ''}`);
           await this.delay(delayMs);
           continue;
         }
