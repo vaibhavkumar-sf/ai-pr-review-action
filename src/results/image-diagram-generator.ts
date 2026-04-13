@@ -186,7 +186,7 @@ async function generateMermaidDiagrams(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const response = await provider.chat(
       messages,
-      { maxTokens: 4096, temperature: 0.3, timeout: 120000 },
+      { maxTokens: 4096, temperature: 0.3, timeout: 300000 },
     );
 
     const diagrams = parseDiagramResponse(response.content);
