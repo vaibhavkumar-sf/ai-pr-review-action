@@ -9,7 +9,7 @@ import { PRCommenter } from './github/pr-commenter';
 import { InlineReviewer } from './github/inline-reviewer';
 import { parseDiff } from './github/diff-parser';
 import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, generateArchitectureDiagram } from './results';
-import { generateDiagramImages } from './results/image-diagram-generator';
+import { generateDiagramImages, validateMermaidViaKroki } from './results/image-diagram-generator';
 import { logger } from './utils/logger';
 
 /**
@@ -269,6 +269,8 @@ async function appendToPRDescription(
       { maxTokens: 4096, temperature: 0.3, timeout: 300000 },
     );
     aiGeneratedContent = sanitizeMermaid(response.content);
+    // Validate mermaid blocks via Kroki — strip any that fail parsing
+    aiGeneratedContent = await validateAndStripBrokenMermaid(aiGeneratedContent);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     core.warning(`Failed to generate AI description: ${msg}`);
@@ -458,11 +460,24 @@ function sanitizeMermaid(content: string): string {
       // Fix ALL malformed edge label patterns the AI generates:
       //   -->, "Yes",   →  -->|"Yes"|
       //   -->, "Yes"|   →  -->|"Yes"|
-      //   -->, "No",    →  -->|"No"|
       //   --> , "Yes" ,  →  -->|"Yes"|
       line = line.replace(
         /-->\s*,\s*"([^"]*)"\s*[,|]?\s*/g,
         '-->|"$1"| ',
+      );
+
+      // Fix edge labels with opening pipe but comma instead of closing pipe:
+      //   -->|"Yes",   →  -->|"Yes"|
+      //   -->|"Yes" ,  →  -->|"Yes"|
+      line = line.replace(
+        /-->\|"([^"]*)"\s*,/g,
+        '-->|"$1"|',
+      );
+
+      // Fix unquoted edge labels with comma closing: -->|Yes, → -->|"Yes"|
+      line = line.replace(
+        /-->\|([^"|,\]]+)\s*,/g,
+        '-->|"$1"|',
       );
 
       // Fix unquoted edge labels: -->|Yes| → -->|"Yes"|
@@ -491,4 +506,26 @@ function sanitizeMermaid(content: string): string {
 
     return '```mermaid\n' + fixedLines.join('\n') + '```';
   });
+}
+
+/**
+ * Validates each ```mermaid block in the content via Kroki.
+ * Strips blocks that fail validation so GitHub doesn't show parse errors.
+ */
+async function validateAndStripBrokenMermaid(content: string): Promise<string> {
+  const mermaidRegex = /```mermaid\n([\s\S]*?)```/g;
+  const matches = [...content.matchAll(mermaidRegex)];
+  if (matches.length === 0) return content;
+
+  let result = content;
+  for (const match of matches) {
+    const mermaidCode = match[1];
+    const error = await validateMermaidViaKroki(mermaidCode);
+    if (error) {
+      core.warning(`Stripping broken Mermaid block from description: ${error.substring(0, 200)}`);
+      result = result.replace(match[0], '');
+    }
+  }
+
+  return result;
 }

@@ -241,7 +241,7 @@ async function generateMermaidDiagrams(
  * Returns null if valid, or the error message string if invalid.
  * Zero npm dependencies — just an HTTP POST.
  */
-async function validateMermaidViaKroki(mermaidCode: string): Promise<string | null> {
+export async function validateMermaidViaKroki(mermaidCode: string): Promise<string | null> {
   try {
     const response = await fetch('https://kroki.io/mermaid/svg', {
       method: 'POST',

@@ -3,6 +3,22 @@ import * as core from '@actions/core';
 import { Finding, ParsedDiff, Severity } from '../types';
 import { findDiffPosition } from './diff-parser';
 
+/** Hidden HTML marker to reliably identify our inline comments regardless of bot login */
+export const INLINE_COMMENT_MARKER = '<!-- ai-pr-review-inline -->';
+
+/**
+ * Builds a fingerprint marker encoding file + title into a compact hash.
+ * Used as the primary dedup key — independent of line numbers.
+ */
+function buildFingerprintMarker(file: string, title: string): string {
+  const normalized = `${file}::${title.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80)}`;
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = ((hash << 5) - hash + normalized.charCodeAt(i)) | 0;
+  }
+  return `<!-- ai-pr-review-fp:${(hash >>> 0).toString(16).padStart(8, '0')} -->`;
+}
+
 const SEVERITY_TAGS: Record<Severity, string> = {
   critical: '\uD83D\uDED1 Critical',
   high: '\uD83D\uDD34 High',
@@ -35,6 +51,7 @@ export class InlineReviewer {
     const existingComments = await this.fetchExistingInlineComments();
 
     const comments: ReviewComment[] = [];
+    const batchFingerprints = new Set<string>();
 
     for (const finding of findings) {
       if (!finding.file || !finding.line) continue;
@@ -60,6 +77,16 @@ export class InlineReviewer {
         );
         continue;
       }
+
+      // Skip if duplicate within this batch (two agents reported same issue)
+      const fingerprint = buildFingerprintMarker(finding.file, finding.title);
+      if (batchFingerprints.has(fingerprint)) {
+        core.debug(
+          `Skipping within-batch duplicate: ${finding.file}:${finding.line} "${finding.title}"`,
+        );
+        continue;
+      }
+      batchFingerprints.add(fingerprint);
 
       // Validate code suggestion against actual line content
       this.validateCodeSuggestion(finding, parsedDiffs);
@@ -103,28 +130,23 @@ export class InlineReviewer {
    */
   private async fetchExistingInlineComments(): Promise<Array<{ path: string; line: number; body: string }>> {
     try {
-      // Get the authenticated user (usually github-actions[bot])
-      let botLogin = 'github-actions[bot]';
-      try {
-        const { data } = await this.octokit.users.getAuthenticated();
-        botLogin = data.login;
-      } catch {
-        // Default to github-actions[bot]
-      }
+      const allComments = await this.octokit.paginate(
+        this.octokit.pulls.listReviewComments,
+        {
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: this.prNumber,
+          per_page: 100,
+        },
+      );
 
-      const { data: reviews } = await this.octokit.pulls.listReviewComments({
-        owner: this.owner,
-        repo: this.repo,
-        pull_number: this.prNumber,
-        per_page: 100,
-      });
-
-      return reviews
-        .filter(c => c.user?.login === botLogin)
+      // Identify our comments by hidden marker (reliable) or bot login (fallback)
+      return allComments
+        .filter(c => c.body?.includes(INLINE_COMMENT_MARKER) || c.user?.login === 'github-actions[bot]')
         .map(c => ({
           path: c.path,
           line: c.line ?? c.original_line ?? 0,
-          body: c.body,
+          body: c.body ?? '',
         }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -141,11 +163,18 @@ export class InlineReviewer {
     finding: Finding,
     existing: Array<{ path: string; line: number; body: string }>,
   ): boolean {
+    // Primary: exact fingerprint match (file + title hash, line-independent)
+    const fingerprint = buildFingerprintMarker(finding.file, finding.title);
+    if (existing.some(c => c.body.includes(fingerprint))) {
+      return true;
+    }
+
+    // Fallback: title-in-body match for comments from older runs without markers
     const titleLower = finding.title.toLowerCase();
     return existing.some(c => {
       if (c.path !== finding.file) return false;
-      if (Math.abs(c.line - finding.line) > 2) return false;
-      // Check if the existing comment body contains this finding's title
+      // When line is 0 (nulled by GitHub after re-trigger), skip line check
+      if (c.line !== 0 && Math.abs(c.line - finding.line) > 2) return false;
       return c.body.toLowerCase().includes(titleLower);
     });
   }
@@ -265,6 +294,9 @@ export class InlineReviewer {
     const severityTag = SEVERITY_TAGS[finding.severity];
     const parts: string[] = [];
 
+    // Hidden markers for reliable dedup across runs
+    parts.push(INLINE_COMMENT_MARKER);
+    parts.push(buildFingerprintMarker(finding.file, finding.title));
     parts.push(`**${severityTag}:** ${finding.title}`);
     parts.push('');
     parts.push(finding.description);

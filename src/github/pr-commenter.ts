@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import { ReviewCategory } from '../types';
+import { INLINE_COMMENT_MARKER } from './inline-reviewer';
 
 const COMMENT_MARKER = '<!-- ai-pr-review-action-comment -->';
 
@@ -154,7 +155,9 @@ export class PRCommenter {
       for (const thread of threads) {
         if (thread.isResolved) continue;
         const firstComment = thread.comments.nodes[0];
-        if (!firstComment || firstComment.author.login !== user) continue;
+        // Identify our comments by marker (reliable) or login (fallback for old comments)
+        if (!firstComment) continue;
+        if (!firstComment.body.includes(INLINE_COMMENT_MARKER) && firstComment.author.login !== user) continue;
 
         // Check if this thread's issue still exists in current findings
         const stillRelevant = currentFindings.some(
