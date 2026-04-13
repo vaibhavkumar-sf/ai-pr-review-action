@@ -70,7 +70,8 @@ export class InlineReviewer {
         finding.line = nearbyLine;
       }
 
-      // Skip if an identical open comment already exists from a previous run
+      // Skip if ANY comment already exists at this file+line from a previous run
+      // (different agents generate different titles for the same issue)
       if (this.isDuplicateOfExisting(finding, existingComments)) {
         core.debug(
           `Skipping duplicate inline comment: ${finding.file}:${finding.line} "${finding.title}" — already exists`,
@@ -78,15 +79,16 @@ export class InlineReviewer {
         continue;
       }
 
-      // Skip if duplicate within this batch (two agents reported same issue)
-      const fingerprint = buildFingerprintMarker(finding.file, finding.title);
-      if (batchFingerprints.has(fingerprint)) {
+      // Skip if we already queued a comment for this file+line in this batch
+      // (one comment per location is enough — first finding wins)
+      const locationKey = `${finding.file}:${finding.line}`;
+      if (batchFingerprints.has(locationKey)) {
         core.debug(
-          `Skipping within-batch duplicate: ${finding.file}:${finding.line} "${finding.title}"`,
+          `Skipping within-batch duplicate: ${finding.file}:${finding.line} "${finding.title}" — location already covered`,
         );
         continue;
       }
-      batchFingerprints.add(fingerprint);
+      batchFingerprints.add(locationKey);
 
       // Validate code suggestion against actual line content
       this.validateCodeSuggestion(finding, parsedDiffs);
@@ -163,18 +165,30 @@ export class InlineReviewer {
     finding: Finding,
     existing: Array<{ path: string; line: number; body: string }>,
   ): boolean {
-    // Primary: exact fingerprint match (file + title hash, line-independent)
+    // Primary: location-based check — if ANY of our comments already exists
+    // at the same file+line (±2), it's a duplicate regardless of title.
+    // Different agents/runs generate different titles for the same issue.
+    const hasCommentAtLocation = existing.some(c =>
+      c.path === finding.file &&
+      c.line !== 0 &&
+      Math.abs(c.line - finding.line) <= 2,
+    );
+    if (hasCommentAtLocation) {
+      return true;
+    }
+
+    // Secondary: fingerprint match (file + title hash, line-independent)
+    // Catches cases where line numbers changed but same issue persists
     const fingerprint = buildFingerprintMarker(finding.file, finding.title);
     if (existing.some(c => c.body.includes(fingerprint))) {
       return true;
     }
 
-    // Fallback: title-in-body match for comments from older runs without markers
+    // Tertiary: title-in-body match for old comments without markers and with line=0
     const titleLower = finding.title.toLowerCase();
     return existing.some(c => {
       if (c.path !== finding.file) return false;
-      // When line is 0 (nulled by GitHub after re-trigger), skip line check
-      if (c.line !== 0 && Math.abs(c.line - finding.line) > 2) return false;
+      if (c.line !== 0) return false; // Non-zero lines already handled above
       return c.body.toLowerCase().includes(titleLower);
     });
   }
