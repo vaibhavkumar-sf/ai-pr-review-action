@@ -200,13 +200,27 @@ async getReport(@param.path.string('id') id: string): Promise<Report> {
 }
 ```
 
-### 4. Missing Pagination on Collections — Severity: HIGH
+### 4. Missing Pagination on Collections — Severity: Varies
 
-Any endpoint or query returning a collection without pagination is a ticking time bomb.
+Not every collection endpoint requires pagination. Apply judgment based on context:
 
-**Bad:**
+**HIGH severity** — Flag as HIGH only when ALL of these are true:
+- The endpoint is a public-facing API (not an internal/admin endpoint)
+- The collection has NO natural upper bound (e.g., users, orders, logs — datasets that grow over time)
+- The endpoint queries a database table directly without any limit
+
+**LOW or NIT severity** — Use LOW or NIT when:
+- The endpoint is internal (called only by other services or admin tools)
+- The endpoint wraps an upstream/external API that does not support pagination (adding pagination locally would be misleading)
+- The collection is naturally bounded (e.g., enum values, status codes, configuration items, encounter reasons, dropdown options)
+- The endpoint already has a WHERE clause that limits results to a small set (e.g., "get items for one specific parent entity")
+
+**Do NOT flag at all when:**
+- The upstream API being wrapped does not support pagination — the wrapper cannot add pagination that doesn't exist upstream
+- The collection is an enum or static list with a known small size
+
+**Bad (HIGH — unbounded public endpoint):**
 ```typescript
-// No pagination — HIGH
 @get('/users')
 async getAllUsers(): Promise<User[]> {
   return this.userRepository.find();
@@ -225,6 +239,14 @@ async getAllUsers(
     this.userRepository.count(),
   ]);
   return { data, total, limit, offset };
+}
+```
+
+**OK (no finding needed — naturally bounded):**
+```typescript
+@get('/encounter-reasons')
+async getEncounterReasons(): Promise<EncounterReason[]> {
+  return this.encounterReasonService.getAll(); // Small, finite list
 }
 ```
 
@@ -430,7 +452,7 @@ Queries filtering or sorting on fields that likely lack indexes. Flag queries on
 1. Trace data flow through every loop to detect N+1 patterns.
 2. Check every subscription, listener, timer, and stream for proper cleanup.
 3. Identify synchronous I/O in async contexts.
-4. Verify every collection endpoint has pagination.
+4. Check collection endpoints for pagination needs — only flag as HIGH when the collection is unbounded and public-facing. Use LOW/NIT for bounded or internal collections. Do NOT flag wrapper endpoints around upstream APIs that lack pagination support.
 5. Look for independent async operations that can be parallelized.
 6. Check for redundant computations inside loops.
 7. Verify large data processing uses streams instead of in-memory buffering.

@@ -469,11 +469,17 @@ const result = total.toString().padStart(10, '0');
 
 #### Boolean Spaghetti — Severity: MEDIUM
 
-Complex boolean expressions should be extracted to well-named helper functions or variables.
+Complex boolean expressions with 3 or more conditions combined with `&&` and `||` should be extracted to well-named helper functions or variables.
 
-**Bad:**
+**IMPORTANT — What IS and IS NOT boolean spaghetti:**
+- A complex expression like `(a && b && !c && (d || e))` with 3+ conditions — YES, this is boolean spaghetti (MEDIUM)
+- A single hardcoded boolean argument like `getToken(false, userId)` — NO, this is NOT spaghetti. Do NOT flag it.
+- A simple ternary `condition ? valueA : valueB` — NO, this is not spaghetti
+- Two conditions `(a && b)` — NO, this is not spaghetti
+- Only flag as MEDIUM when there are 3+ distinct boolean conditions chained together
+
+**Bad (MEDIUM — 5 conditions combined):**
 ```typescript
-// Boolean spaghetti — MEDIUM
 if (user.role === 'admin' && user.isActive && !user.isLocked && (user.department === 'engineering' || user.department === 'devops') && user.mfaEnabled) {
   // ...
 }
@@ -488,6 +494,12 @@ const hasRequiredSecurity = user.mfaEnabled;
 if (isAuthorizedAdmin && isInAllowedDepartment && hasRequiredSecurity) {
   // ...
 }
+```
+
+**NOT spaghetti — do NOT flag:**
+```typescript
+const token = await getToken(false, userId);
+if (isActive && hasPermission) { /* ... */ }
 ```
 
 #### Duplicate Patterns Across Similar Methods — Severity: MEDIUM

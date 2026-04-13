@@ -207,14 +207,15 @@ try {
 
 ### 7. Missing JSDoc on Functions and Methods — Severity: MEDIUM
 
-EVERY function and method MUST have a JSDoc comment (`/** ... */`) directly above it. This applies to ALL visibility levels: public, private, and protected. A class-level JSDoc comment does NOT substitute for method-level comments.
+EVERY function and method MUST have a JSDoc comment (`/** ... */`) directly above it. If a JSDoc comment exists — even a brief description without `@param` or `@returns` tags — that is SUFFICIENT. Do NOT flag incomplete JSDoc. Only flag functions that have NO JSDoc comment at all.
 
-For EACH function missing a JSDoc comment, create a SEPARATE finding with:
+This applies to ALL visibility levels: public, private, and protected. A class-level JSDoc comment does NOT substitute for method-level comments.
+
+For EACH function with NO JSDoc comment at all, create a SEPARATE finding with:
 - The exact line number of the function declaration
-- A complete JSDoc block as `code_suggestion` that includes:
-  - A brief description of what the function does
-  - `@param` tags for every parameter (with type and description)
-  - `@returns` tag describing the return value (for non-void functions)
+- A JSDoc block as `code_suggestion` that includes at minimum a brief description of what the function does
+
+If a function already has a JSDoc comment (even just `/** Brief description */` without @param/@returns), do NOT flag it. Having JSDoc is sufficient.
 
 **Bad:**
 ```typescript
@@ -279,34 +280,23 @@ Each of the three methods above would get its own finding. Example findings:
 }
 ```
 
-### 8. Missing @param and @returns Tags — Severity: LOW
+### Exception: LoopBack4 @property() with Description
 
-Functions that have a JSDoc comment but are missing `@param` or `@returns` tags on non-trivial signatures.
+Do NOT flag missing JSDoc on LoopBack4 model properties that already have a `description` field in their `@property()` decorator. The decorator description serves as documentation for both the API spec and developers.
 
-**Bad:**
+**Example — Do NOT flag:**
 ```typescript
-// Missing @param and @returns — LOW
-/** Creates a new order. */
-async createOrder(userId: string, items: CartItem[], couponCode?: string): Promise<Order> {
-  // ...
-}
+@property({
+  type: 'number',
+  required: true,
+  description: 'Unique identifier of the encounter reason.',
+})
+encounterreasonid: number;
 ```
 
-**Good:**
-```typescript
-/**
- * Creates a new order for the specified user with the given items.
- * @param userId - The unique identifier of the ordering user.
- * @param items - The list of cart items to include in the order.
- * @param couponCode - Optional coupon code for a discount.
- * @returns The newly created order entity.
- */
-async createOrder(userId: string, items: CartItem[], couponCode?: string): Promise<Order> {
-  // ...
-}
-```
+Only flag a LoopBack4 model property for missing documentation if it has NEITHER a JSDoc comment NOR a `description` field in the `@property()` decorator.
 
-### 9. Inline Response Schemas in Controller Decorators — Severity: MEDIUM to HIGH
+### 8. Inline Response Schemas in Controller Decorators — Severity: MEDIUM to HIGH
 
 NEVER accept inline schema objects in controller or route decorators. The schema must reference a DTO or model class.
 
@@ -375,7 +365,7 @@ async getUserById(@param.path.string('id') id: string): Promise<User> {
 1. Scan EVERY function and method declaration in the diff.
 2. For EACH function, check:
    a. Does it have an explicit return type? If not, create a finding.
-   b. Does it have a JSDoc comment with `@param` and `@returns`? If not, create a finding.
+   b. Does it have ANY JSDoc comment (`/** ... */`)? If not, create a finding. If it has a JSDoc comment (even without @param/@returns), do NOT flag it.
    c. Do all parameters have explicit types? If not, create a finding for each.
 3. For EACH class property, check for type annotation.
 4. Search for `any`, `object`, `Function`, `{}` — create a finding for each occurrence.

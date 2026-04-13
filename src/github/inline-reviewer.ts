@@ -60,7 +60,7 @@ export class InlineReviewer {
       const position = findDiffPosition(parsedDiffs, finding.file, finding.line);
       if (position === null) {
         // Try nearby lines (AI might be off by 1-2 lines)
-        const nearbyLine = this.findNearbyDiffLine(parsedDiffs, finding.file, finding.line);
+        const nearbyLine = this.findNearbyDiffLine(parsedDiffs, finding.file, finding.line, finding);
         if (nearbyLine === null) {
           core.debug(
             `Skipping inline comment: ${finding.file}:${finding.line} not found in diff`,
@@ -258,22 +258,54 @@ export class InlineReviewer {
 
   /**
    * If a finding's line number isn't exactly in the diff, search nearby lines
-   * (within +/- 3) that ARE in the diff. Returns the nearest valid line or null.
+   * (within +/- 3) that ARE in the diff. Prefers lines whose content is
+   * relevant to the finding title. Returns the nearest valid line or null.
    */
   private findNearbyDiffLine(
     parsedDiffs: ParsedDiff[],
     filename: string,
     targetLine: number,
+    finding?: Finding,
   ): number | null {
+    const candidates: Array<{ line: number; offset: number }> = [];
+
     for (let offset = 1; offset <= 3; offset++) {
       if (findDiffPosition(parsedDiffs, filename, targetLine + offset) !== null) {
-        return targetLine + offset;
+        candidates.push({ line: targetLine + offset, offset });
       }
       if (findDiffPosition(parsedDiffs, filename, targetLine - offset) !== null) {
-        return targetLine - offset;
+        candidates.push({ line: targetLine - offset, offset });
       }
     }
-    return null;
+
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1 || !finding) return candidates[0].line;
+
+    // Score candidates by content relevance to the finding title
+    const titleWords = new Set(
+      finding.title.toLowerCase().split(/[\s:_\-./()]+/).filter(w => w.length > 2),
+    );
+
+    let bestCandidate = candidates[0];
+    let bestScore = -1;
+
+    for (const candidate of candidates) {
+      const content = this.getOriginalLineContent(parsedDiffs, filename, candidate.line);
+      if (!content) continue;
+
+      const contentWords = content.toLowerCase().split(/[\s:_\-./()]+/).filter(w => w.length > 2);
+      let score = 0;
+      for (const word of contentWords) {
+        if (titleWords.has(word)) score++;
+      }
+      // Prefer higher relevance; break ties by closest offset
+      if (score > bestScore || (score === bestScore && candidate.offset < bestCandidate.offset)) {
+        bestScore = score;
+        bestCandidate = candidate;
+      }
+    }
+
+    return bestCandidate.line;
   }
 
   /**
