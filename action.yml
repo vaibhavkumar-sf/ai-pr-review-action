@@ -157,7 +157,7 @@ inputs:
   agent_timeout:
     description: 'Timeout in seconds for each review agent AI call'
     required: false
-    default: '120'
+    default: '300'
   max_retries:
     description: 'Maximum retries per agent on AI API failure'
     required: false

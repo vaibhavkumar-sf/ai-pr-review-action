@@ -278,7 +278,6 @@ async function appendToPRDescription(
     aiGeneratedContent = buildFallbackDescription(merged, context);
   }
 
-  // Generate rendered diagram images (D2 + mermaid.ink) if enabled
   // Generate rich Mermaid diagrams (rendered natively by GitHub)
   let diagramsMarkdown = '';
   if (config.enableDiagrams) {
@@ -290,6 +289,19 @@ async function appendToPRDescription(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       core.warning(`Failed to generate diagrams: ${msg}`);
+    }
+  }
+
+  // If diagram generation failed but existing description already has diagrams,
+  // carry them forward instead of losing them
+  if (!diagramsMarkdown && separatorIndex >= 0) {
+    const existingAiSection = existingBody.substring(separatorIndex);
+    const existingDiagramMatch = existingAiSection.match(/## Diagrams[\s\S]*?(?=## (?!#)|$)/);
+    if (existingDiagramMatch) {
+      diagramsMarkdown = existingDiagramMatch[0].replace(/^## Diagrams\s*\n?/, '').trim();
+      if (diagramsMarkdown) {
+        logger.info('Preserved existing diagrams from previous run');
+      }
     }
   }
 

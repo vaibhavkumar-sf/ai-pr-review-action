@@ -152,33 +152,58 @@ export class PRCommenter {
 
       const threads = result.repository.pullRequest.reviewThreads.nodes;
 
+      // Collect our unresolved threads
+      // GraphQL returns 'github-actions', REST returns 'github-actions[bot]' — handle both
+      const botLoginVariant = user.replace('[bot]', '');
+      const ourThreads: Array<{ id: string; path: string; line: number; body: string }> = [];
+
       for (const thread of threads) {
         if (thread.isResolved) continue;
         const firstComment = thread.comments.nodes[0];
-        // Identify our comments by marker (reliable) or login (fallback for old comments)
         if (!firstComment) continue;
-        if (!firstComment.body.includes(INLINE_COMMENT_MARKER) && firstComment.author.login !== user) continue;
 
-        // Check if this thread's issue still exists in current findings
+        const isOurs = firstComment.body.includes(INLINE_COMMENT_MARKER) ||
+          firstComment.author.login === user ||
+          firstComment.author.login === botLoginVariant;
+        if (!isOurs) continue;
+
+        ourThreads.push({
+          id: thread.id,
+          path: firstComment.path,
+          line: firstComment.line ?? 0,
+          body: firstComment.body,
+        });
+      }
+
+      // Step 1: Resolve duplicate threads at the same file+line (keep only the latest)
+      const locationMap = new Map<string, typeof ourThreads>();
+      for (const thread of ourThreads) {
+        const key = `${thread.path}:${thread.line}`;
+        const existing = locationMap.get(key) || [];
+        existing.push(thread);
+        locationMap.set(key, existing);
+      }
+
+      const threadsToKeep = new Set<string>();
+      for (const [, threadsAtLocation] of locationMap) {
+        // Keep only the last thread (most recent), resolve all earlier ones
+        threadsToKeep.add(threadsAtLocation[threadsAtLocation.length - 1].id);
+        for (let i = 0; i < threadsAtLocation.length - 1; i++) {
+          resolved += await this.resolveThread(threadsAtLocation[i].id);
+        }
+      }
+
+      // Step 2: Resolve threads where the issue is no longer in current findings
+      for (const thread of ourThreads) {
+        if (!threadsToKeep.has(thread.id)) continue; // Already resolved as duplicate
+
         const stillRelevant = currentFindings.some(
-          f => f.file === firstComment.path &&
-               Math.abs(f.line - (firstComment.line ?? 0)) <= 3,
+          f => f.file === thread.path &&
+               Math.abs(f.line - thread.line) <= 3,
         );
 
         if (!stillRelevant) {
-          try {
-            await this.octokit.graphql(`
-              mutation($threadId: ID!) {
-                resolveReviewThread(input: {threadId: $threadId}) {
-                  thread { isResolved }
-                }
-              }
-            `, { threadId: thread.id });
-            resolved++;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            core.debug(`Failed to resolve thread: ${msg}`);
-          }
+          resolved += await this.resolveThread(thread.id);
         }
       }
     } catch (err) {
@@ -191,6 +216,23 @@ export class PRCommenter {
     }
 
     return resolved;
+  }
+
+  private async resolveThread(threadId: string): Promise<number> {
+    try {
+      await this.octokit.graphql(`
+        mutation($threadId: ID!) {
+          resolveReviewThread(input: {threadId: $threadId}) {
+            thread { isResolved }
+          }
+        }
+      `, { threadId });
+      return 1;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      core.debug(`Failed to resolve thread: ${msg}`);
+      return 0;
+    }
   }
 
   private formatStatus(agentStatus: AgentStatus): string {
