@@ -9,7 +9,7 @@ import { PRCommenter } from './github/pr-commenter';
 import { InlineReviewer } from './github/inline-reviewer';
 import { parseDiff } from './github/diff-parser';
 import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, generateArchitectureDiagram } from './results';
-import { generateDiagramImages, validateMermaidViaKroki } from './results/image-diagram-generator';
+import { generateDiagramImages, validateMermaid } from './results/image-diagram-generator';
 import { logger } from './utils/logger';
 
 /**
@@ -365,27 +365,24 @@ function buildDescriptionPrompt(
 You MUST include:
 1. **## What this PR does** — A detailed explanation (3-8 sentences) of what changes were made and why.
 2. **## Changes** — A bullet list of specific changes made, grouped logically.
-3. **## Architecture** — One or more Mermaid diagrams showing the flow or structure. Choose the BEST diagram type for the content — do NOT always default to flowchart:
-   - \`sequenceDiagram\` — PREFERRED for API calls, service interactions, request/response flows, multi-step processes between components
-   - \`flowchart TD\` — for decision trees, conditional logic, CI/CD pipelines, workflow triggers
-   - \`graph TD\` — for file/module dependency relationships, import trees
-   - \`classDiagram\` — for class hierarchies, interfaces, type relationships
-   - \`stateDiagram-v2\` — for state machines, lifecycle flows
-   You may include MULTIPLE diagrams if the PR involves both interactions and structure. ALWAYS generate at least one diagram.
+3. **## Architecture** — One or more Mermaid diagrams showing the flow or structure. Choose the BEST diagram type:
+   - \`sequenceDiagram\` — for API calls, service interactions, multi-step processes
+   - \`flowchart TD\` — for decision trees, conditional logic, CI/CD pipelines
+   ALWAYS generate at least one diagram.
 4. **## Impact** — What existing functionality is affected, and any risks.
 
-## CRITICAL Mermaid Syntax Rules — Follow EXACTLY or the diagram will break:
+## CRITICAL Mermaid Rules — GitHub WILL break if you violate these:
 
-1. **Quote ALL labels** with double quotes — every node and edge label, no exceptions:
-   \`A["Label"] --> B["Label"]\`
-2. **Edge labels use PIPE syntax** — \`-->|"label"|\` with pipes, NEVER commas:
-   - CORRECT: \`A -->|"Yes"| B\`
-   - WRONG:  \`A -->, "Yes", B\` (this WILL break)
-   - WRONG:  \`A -->|Yes| B\` (missing quotes)
-3. **No special characters unquoted** — always wrap in double quotes
-4. **No HTML tags** — no \`<br/>\`, \`<b>\`, etc.
-5. **Short labels** — max 4-5 words per node
-6. **Simple IDs** — single letters: A, B, C, D, E, F
+1. **NO %%{init}%% theming** — Do NOT include any theme configuration
+2. **NO emojis in labels** — Plain text only
+3. **Quote ALL labels**: \`A["Label"]\`, \`B{"Decision?"}\`
+4. **Edge labels use pipes**: \`-->|"Yes"|\` — NEVER commas
+5. **NO colons in labels** — Use dashes: \`A["Step - Details"]\`
+6. **NO special characters**: no \`:\`, \`::\`, \`<\`, \`>\`, \`&\`, \`|\` in labels
+7. **par/and blocks ONLY in sequenceDiagram** — NEVER in flowcharts
+8. **Short labels** — max 30 characters
+9. **Simple node IDs** — single letters: A, B, C, D
+10. **NO style directives** — no \`style\`, no \`classDef\`
 
 COPY THIS EXACT PATTERN for flowcharts:
 \`\`\`mermaid
@@ -469,6 +466,9 @@ function sanitizeMermaid(content: string): string {
       // Remove HTML tags (<br/>, <b>, etc.)
       line = line.replace(/<[^>]+>/g, ' ');
 
+      // Fix double colons in labels (breaks GitHub parser)
+      line = line.replace(/::/g, ' - ');
+
       // Fix ALL malformed edge label patterns the AI generates:
       //   -->, "Yes",   →  -->|"Yes"|
       //   -->, "Yes"|   →  -->|"Yes"|
@@ -532,7 +532,7 @@ async function validateAndStripBrokenMermaid(content: string): Promise<string> {
   let result = content;
   for (const match of matches) {
     const mermaidCode = match[1];
-    const error = await validateMermaidViaKroki(mermaidCode);
+    const error = await validateMermaid(mermaidCode);
     if (error) {
       core.warning(`Stripping broken Mermaid block from description: ${error.substring(0, 200)}`);
       result = result.replace(match[0], '');

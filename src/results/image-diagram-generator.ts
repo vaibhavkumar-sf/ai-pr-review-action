@@ -3,11 +3,11 @@ import { ReviewContext, MergedReviewResult } from '../types';
 import * as core from '@actions/core';
 
 /**
- * Generates rich Mermaid diagrams (flowchart + sequence) via AI and returns
+ * Generates Mermaid diagrams (flowchart + sequence) via AI and returns
  * them as native ```mermaid code blocks for GitHub's server-side rendering.
  *
- * GitHub renders ```mermaid blocks natively — works in both public AND private
- * repos with zero external dependencies or image hosting.
+ * Validates diagrams locally using the same mermaid.js parser that GitHub uses,
+ * with Kroki.io as a fallback validator.
  */
 export async function generateDiagramImages(
   context: ReviewContext,
@@ -58,7 +58,7 @@ interface MermaidDiagrams {
   sequence: string | null;
 }
 
-const MERMAID_SYSTEM_PROMPT = `You are a world-class diagram designer. Generate BEAUTIFUL, production-quality Mermaid diagrams.
+const MERMAID_SYSTEM_PROMPT = `You are a diagram designer. Generate clean Mermaid diagrams that render on GitHub.
 
 You MUST output EXACTLY this JSON format:
 \`\`\`json
@@ -68,108 +68,88 @@ You MUST output EXACTLY this JSON format:
 }
 \`\`\`
 
-## FLOWCHART — Use rich styling with %%{init}%% theme config:
+## FLOWCHART EXAMPLE — Copy this pattern:
 
 \`\`\`mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#e3f2fd', 'primaryTextColor': '#0d47a1', 'primaryBorderColor': '#1565c0', 'lineColor': '#1565c0', 'secondaryColor': '#f3e5f5', 'tertiaryColor': '#e8f5e9', 'fontFamily': 'arial', 'fontSize': '14px'}}}%%
 flowchart TD
-    A["\uD83D\uDCE5 PR Opened"] --> B{"\uD83E\uDD16 Bot Check"}
-    B -->|"Skip"| C["\u26D4 End"]
-    B -->|"Valid"| D["\uD83D\uDD0D Load Context"]
-    D --> E["\uD83D\uDDC2\uFE0F Fetch JIRA"]
-    D --> F["\uD83D\uDCC4 Read Files"]
-    E & F --> G["\u2699\uFE0F Run Agents"]
+    A["PR Opened"] --> B{"Bot Check"}
+    B -->|"Skip"| C["End"]
+    B -->|"Valid"| D["Load Context"]
+    D --> E["Fetch JIRA"]
+    D --> F["Read Files"]
+    E --> G["Run Agents"]
+    F --> G
 
-    subgraph agents ["\uD83E\uDDE0 AI Review Agents"]
+    subgraph agents ["AI Review Agents"]
         direction LR
-        G1["\uD83D\uDD12 Security"]
-        G2["\uD83D\uDCDD Code Quality"]
-        G3["\u26A1 Performance"]
-        G4["\uD83D\uDD0D Type Safety"]
-        G5["\uD83C\uDFD7\uFE0F Architecture"]
+        G1["Security"]
+        G2["Code Quality"]
+        G3["Performance"]
     end
 
     G --> agents
-    agents --> H["\uD83E\uDDE9 Consolidate"]
-    H --> I["\uD83D\uDCAC Post Comments"]
-    H --> J["\uD83D\uDCC8 Update Description"]
-
-    style agents fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c
-    style A fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-    style B fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style C fill:#fce4ec,stroke:#c62828,stroke-width:2px
-    style H fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    style I fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-    style J fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    agents --> H["Consolidate"]
+    H --> I["Post Comments"]
 \`\`\`
 
-## SEQUENCE DIAGRAM — Use rich styling:
+## SEQUENCE DIAGRAM EXAMPLE — Copy this pattern:
 
 \`\`\`mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#e3f2fd', 'actorBorder': '#1565c0', 'actorTextColor': '#0d47a1', 'signalColor': '#1565c0', 'signalTextColor': '#333', 'noteBkgColor': '#fff3e0', 'noteBorderColor': '#e65100', 'noteTextColor': '#333', 'activationBkgColor': '#e8f5e9', 'activationBorderColor': '#2e7d32', 'fontFamily': 'arial'}}}%%
 sequenceDiagram
-    actor Dev as \uD83D\uDC69\u200D\uD83D\uDCBB Developer
-    participant GH as \uD83D\uDC19 GitHub
-    participant AI as \uD83E\uDD16 AI Action
-    participant LLM as \uD83E\uDDE0 Anthropic API
-    participant JIRA as \uD83D\uDCCB JIRA
+    participant Dev as Developer
+    participant GH as GitHub
+    participant AI as AI Action
+    participant LLM as Anthropic API
 
     Dev->>GH: Open Pull Request
     activate GH
     GH->>AI: Trigger workflow
     activate AI
-    AI->>GH: Fetch PR diff + files
-    GH-->>AI: Return code context
+    AI->>GH: Fetch PR diff
+    GH-->>AI: Return context
 
     par Parallel Context
-        AI->>JIRA: Fetch ticket details
-        JIRA-->>AI: Return context
-    and
         AI->>GH: Read CLAUDE.md
-        GH-->>AI: Return repo rules
+        GH-->>AI: Return rules
+    and
+        AI->>LLM: Send code for review
+        LLM-->>AI: Return findings
     end
 
-    AI->>LLM: Send code + rules
-    activate LLM
-    Note over LLM: Extended thinking enabled
-    LLM-->>AI: Return findings
-    deactivate LLM
-
-    AI->>AI: Consolidate + deduplicate
     AI->>GH: Post inline comments
     AI->>GH: Update PR description
-    AI->>GH: Add diagrams
     deactivate AI
     deactivate GH
 \`\`\`
 
-## CRITICAL SYNTAX RULES:
+## CRITICAL RULES — GitHub will BREAK if you violate these:
 
-1. **Theme config MUST be on first line** — use %%{init}%% with Material Design colors
-2. **Use emoji icons** in node labels for visual richness: \uD83D\uDD12 \uD83D\uDCDD \u26A1 \uD83D\uDD0D \uD83C\uDFD7\uFE0F \uD83E\uDDEA \uD83D\uDD0C \uD83E\uDD16 \uD83D\uDCE5 \u2699\uFE0F \uD83D\uDCC4 \uD83D\uDDC2\uFE0F \uD83D\uDCAC \uD83D\uDCC8 \uD83D\uDC19 \uD83E\uDDE0 \uD83D\uDCCB \u26D4 \uD83D\uDE80 \uD83D\uDEE1\uFE0F \uD83D\uDCCA
-3. **Use subgraph** to group related components with styled backgrounds
-4. **Use style directives** for custom colors: \`style nodeId fill:#color,stroke:#color,stroke-width:2px\`
-5. **Use par/and blocks** in sequence diagrams for parallel operations
-6. **Use activate/deactivate** in sequence diagrams for lifecycle
-7. **Use Note over** for important callouts in sequence diagrams
-8. **Quote ALL labels** that contain special characters or spaces
-9. **Edge labels use pipe syntax**: \`-->|"label"|\` — NEVER use commas
-10. **Keep labels SHORT** — max 3-5 words + emoji per node
-11. Make diagrams SPECIFIC to THIS PR — not generic
+1. **NO %%{init}%% theming** — GitHub ignores most of it and it often causes parse errors. Do NOT include any theme configuration.
+2. **NO emojis in node labels** — Use plain text only: \`A["Load Context"]\` not \`A["📥 Load Context"]\`
+3. **Quote ALL labels** with double quotes: \`A["My Label"]\`, \`B{"Decision?"}\`
+4. **Edge labels use pipe syntax**: \`-->|"Yes"|\` — NEVER use commas
+5. **Node IDs are single letters or short words**: A, B, C, D or act1, svc1
+6. **NO colons in labels** — Use dashes instead: \`A["Step - Details"]\` not \`A["Step: Details"]\`
+7. **NO special characters** in labels: no \`:\`, \`::\`, \`<\`, \`>\`, \`&\`, \`|\`
+8. **par/and blocks ONLY in sequenceDiagram** — NEVER use \`par\` in flowcharts
+9. **Keep labels under 30 characters**
+10. **NO style directives** — Keep it simple, no \`style\` or \`classDef\`
+11. **subgraph labels must be quoted**: \`subgraph name ["Label"]\`
 
 ## Rules for different PR types:
-- **Angular PRs**: Show components, services, modules, guards, routing, state management
-- **LoopBack4 PRs**: Show controllers, services, repositories, models, datasources, middleware
-- **Workflow/Config PRs**: Show CI/CD pipeline, triggers, steps, outputs
-- **API PRs**: Show request flow, validation, service layer, database, response
+- **Angular PRs**: Show components, services, modules, routing
+- **LoopBack4 PRs**: Show controllers, services, repositories, models
+- **Workflow/Config PRs**: Show CI/CD pipeline, triggers, steps
+- **API PRs**: Show request flow, validation, service layer, response
 
+Make diagrams SPECIFIC to THIS PR — not generic.
 Output ONLY valid JSON. If sequence diagram doesn't apply, set "sequence" to null.`;
 
 async function generateMermaidDiagrams(
   context: ReviewContext,
   provider: AIProvider,
 ): Promise<MermaidDiagrams> {
-  let userPrompt = `Generate beautiful Mermaid diagrams for this PR:\n\n`;
+  let userPrompt = `Generate clean Mermaid diagrams for this PR:\n\n`;
   userPrompt += `**Title:** ${context.prTitle}\n`;
   userPrompt += `**Branch:** ${context.headBranch} → ${context.baseBranch}\n`;
   userPrompt += `**Framework:** ${context.framework}\n`;
@@ -191,9 +171,13 @@ async function generateMermaidDiagrams(
 
     const diagrams = parseDiagramResponse(response.content);
 
-    // Validate each diagram via Kroki
-    const flowchartError = diagrams.flowchart ? await validateMermaidViaKroki(diagrams.flowchart) : null;
-    const sequenceError = diagrams.sequence ? await validateMermaidViaKroki(diagrams.sequence) : null;
+    // Sanitize before validation
+    if (diagrams.flowchart) diagrams.flowchart = sanitizeMermaidCode(diagrams.flowchart);
+    if (diagrams.sequence) diagrams.sequence = sanitizeMermaidCode(diagrams.sequence);
+
+    // Validate using local mermaid.parse() (same parser as GitHub)
+    const flowchartError = diagrams.flowchart ? await validateMermaid(diagrams.flowchart) : null;
+    const sequenceError = diagrams.sequence ? await validateMermaid(diagrams.sequence) : null;
 
     if (!flowchartError && !sequenceError) {
       if (attempt > 0) {
@@ -219,14 +203,14 @@ async function generateMermaidDiagrams(
     if (sequenceError) {
       fixPrompt += `**Sequence diagram error:**\n\`\`\`\n${sequenceError}\n\`\`\`\n\nBroken sequence code:\n\`\`\`mermaid\n${diagrams.sequence}\n\`\`\`\n\n`;
     }
-    fixPrompt += `Fix the syntax errors and return the corrected diagrams in the same JSON format. Common fixes:\n`;
-    fixPrompt += `- Remove special characters from labels (use simple text + emoji)\n`;
-    fixPrompt += `- Quote labels with square brackets: use A["\uD83D\uDD12 Label"] not A[\uD83D\uDD12 Label]\n`;
-    fixPrompt += `- Use -->|"label"| for edge labels, never commas\n`;
-    fixPrompt += `- Ensure subgraph blocks are properly closed with 'end'\n`;
-    fixPrompt += `- Check par/and/end blocks are properly nested\n`;
+    fixPrompt += `Fix the syntax errors. Common fixes:\n`;
+    fixPrompt += `- Remove ALL %%{init}%% theme lines\n`;
+    fixPrompt += `- Remove emojis from labels\n`;
+    fixPrompt += `- Quote ALL labels: A["Label"] not A[Label]\n`;
+    fixPrompt += `- Edge labels: -->|"label"| not -->|"label",\n`;
+    fixPrompt += `- Do NOT use par/and blocks in flowcharts — only in sequenceDiagram\n`;
+    fixPrompt += `- No colons in labels — use dashes\n`;
 
-    // Add assistant response + fix request to conversation for context
     messages.push({ role: 'assistant', content: response.content });
     messages.push({ role: 'user', content: fixPrompt });
 
@@ -237,9 +221,98 @@ async function generateMermaidDiagrams(
 }
 
 /**
+ * Sanitizes Mermaid code by fixing common AI-generated syntax issues.
+ */
+function sanitizeMermaidCode(code: string): string {
+  const lines = code.split('\n');
+  const fixedLines = lines.map(line => {
+    // Remove HTML tags
+    line = line.replace(/<[^>]+>/g, ' ');
+
+    // Fix double colons in labels
+    line = line.replace(/::/g, ' - ');
+
+    // Fix edge labels: -->, "Yes", → -->|"Yes"|
+    line = line.replace(/-->\s*,\s*"([^"]*)"\s*[,|]?\s*/g, '-->|"$1"| ');
+
+    // Fix edge labels: -->|"Yes", → -->|"Yes"|
+    line = line.replace(/-->\|"([^"]*)"\s*,/g, '-->|"$1"|');
+
+    // Fix unquoted edge labels with comma: -->|Yes, → -->|"Yes"|
+    line = line.replace(/-->\|([^"|,\]]+)\s*,/g, '-->|"$1"|');
+
+    // Fix unquoted edge labels: -->|Yes| → -->|"Yes"|
+    line = line.replace(/-->\|([^"|]+)\|/g, '-->|"$1"|');
+
+    // Remove pipe chars inside quoted labels
+    line = line.replace(/"([^"]*)\|([^"]*)"/g, (_, a, b) => `"${a}, ${b}"`);
+
+    return line;
+  });
+
+  return fixedLines.join('\n');
+}
+
+/**
+ * Validates Mermaid syntax using the local mermaid.js parser (same as GitHub).
+ * Falls back to Kroki.io if local validation is unavailable.
+ * Returns null if valid, or the error message string if invalid.
+ */
+export async function validateMermaid(mermaidCode: string): Promise<string | null> {
+  // Try local validation first (same parser as GitHub)
+  const localResult = await validateMermaidLocally(mermaidCode);
+  if (localResult !== undefined) {
+    return localResult; // null = valid, string = error
+  }
+
+  // Fall back to Kroki if local validation unavailable
+  return validateMermaidViaKroki(mermaidCode);
+}
+
+/**
+ * Validates Mermaid syntax using the local mermaid.js parser.
+ * Returns null if valid, error string if invalid, undefined if parser unavailable.
+ */
+async function validateMermaidLocally(mermaidCode: string): Promise<string | null | undefined> {
+  try {
+    const { JSDOM } = await import('jsdom');
+    const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>');
+    (globalThis as Record<string, unknown>).window = dom.window;
+    (globalThis as Record<string, unknown>).document = dom.window.document;
+    Object.defineProperty(globalThis, 'navigator', {
+      value: dom.window.navigator,
+      writable: true,
+      configurable: true,
+    });
+    (globalThis as Record<string, unknown>).DOMParser = dom.window.DOMParser;
+
+    const DOMPurifyModule = await import('dompurify');
+    const DOMPurify = (DOMPurifyModule.default as (window: unknown) => unknown)(dom.window);
+    (globalThis as Record<string, unknown>).DOMPurify = DOMPurify;
+
+    const mermaidModule = await import('mermaid');
+    const mermaid = mermaidModule.default;
+
+    await mermaid.parse(mermaidCode);
+    return null; // Valid
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+
+    // If it's a module loading error, local validation is unavailable
+    if (msg.includes('Cannot find module') || msg.includes('ERR_MODULE_NOT_FOUND')) {
+      core.debug('Local mermaid validation unavailable, falling back to Kroki');
+      return undefined;
+    }
+
+    // Parse error — diagram is invalid
+    return msg.substring(0, 500);
+  }
+}
+
+/**
  * Validates Mermaid syntax by sending it to Kroki.io's Mermaid renderer.
  * Returns null if valid, or the error message string if invalid.
- * Zero npm dependencies — just an HTTP POST.
+ * When Kroki is unreachable, returns an error (does NOT silently pass).
  */
 export async function validateMermaidViaKroki(mermaidCode: string): Promise<string | null> {
   try {
@@ -254,19 +327,18 @@ export async function validateMermaidViaKroki(mermaidCode: string): Promise<stri
       return null; // Valid!
     }
 
-    // Extract FULL error from Kroki response and send to AI for fixing
     const errorBody = await response.text();
-    // Strip HTML/SVG tags to get plain error text
     const plainError = errorBody
       .replace(/<[^>]+>/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
-      .substring(0, 500); // Cap at 500 chars to keep prompt manageable
+      .substring(0, 500);
     return plainError || `Kroki validation failed with HTTP ${response.status}`;
   } catch (err) {
-    // If Kroki is unreachable, skip validation (don't block the review)
-    core.debug(`Kroki validation skipped: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
+    // Kroki unreachable — return error instead of silently passing
+    const msg = err instanceof Error ? err.message : String(err);
+    core.warning(`Kroki validation unavailable: ${msg}`);
+    return `Kroki unreachable: ${msg}`;
   }
 }
 
