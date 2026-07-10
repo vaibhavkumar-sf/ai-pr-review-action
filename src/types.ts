@@ -84,8 +84,8 @@ export interface ActionConfig {
   maxTokens: number;
   // Total context window of the target model, in tokens. The assembled prompt is
   // trimmed to fit within (contextWindow - reserved output) so requests are not
-  // rejected with model_context_window_exceeded. Default 1000000 (GLM-5.2 / Claude
-  // Opus 4.8); lower to 200000 for a 200K-tier model such as GLM-4.6.
+  // rejected with model_context_window_exceeded. Default 200000 (the GLM tier the
+  // default model maps to); raise to 1000000 only for a genuine 1M-context model.
   contextWindow: number;
   temperature: number;
 

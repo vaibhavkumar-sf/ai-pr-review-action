@@ -21,17 +21,17 @@ inputs:
     required: false
     default: 'https://api.anthropic.com'
   anthropic_model:
-    description: 'Model ID to use for reviews. Default targets the z.ai GLM endpoint; set to claude-opus-4-8 for real Anthropic, or glm-4.6 for the 200K GLM tier'
+    description: 'Model ID to use for reviews. Must be an id the configured endpoint accepts (the org z.ai endpoint accepts Claude-tier names and maps them to GLM; raw GLM ids may be rejected as Unknown Model)'
     required: false
-    default: 'glm-5.2[1m]'
+    default: 'claude-opus-4-8'
   max_tokens:
     description: 'Maximum tokens per AI response'
     required: false
     default: '8192'
   context_window:
-    description: "Total context window of the target model, in tokens. The prompt is trimmed to fit within this minus reserved output, avoiding model_context_window_exceeded. Default 1000000 (GLM-5.2 / Claude Opus 4.8); lower to 200000 for a 200K-tier model such as GLM-4.6"
+    description: "Total context window of the target model, in tokens. The prompt is trimmed to fit within this minus reserved output, avoiding model_context_window_exceeded. Default 200000 (the GLM tier the default model maps to); raise to 1000000 for a genuine 1M-context model"
     required: false
-    default: '1000000'
+    default: '200000'
   temperature:
     description: 'AI temperature (0.0 - 1.0)'
     required: false

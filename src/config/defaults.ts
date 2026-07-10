@@ -1,15 +1,17 @@
 import { ActionConfig, ReviewProfile, ReviewMode, Framework, FailThreshold } from '../types';
 import { getEnabledAgents } from './profiles';
 
-// Org default: latest GLM flagship on the z.ai Anthropic-compatible endpoint
-// (1M context). Override anthropic_model when pointing at a different provider
-// (e.g. 'claude-opus-4-8' for real Anthropic, 'glm-4.6' for the 200K tier).
-export const DEFAULT_MODEL = 'glm-5.2[1m]';
+// Default model. The org's ANTHROPIC_BASE_URL is a z.ai (GLM) Anthropic-compatible
+// endpoint that accepts CLAUDE-tier model names and maps them internally to a GLM
+// model (~200K window) — raw GLM ids like 'glm-5.2[1m]' are rejected as "Unknown
+// Model". Keep a Claude-tier name here; override anthropic_model + context_window
+// for a different provider or a larger-context tier once its exact id is confirmed.
+export const DEFAULT_MODEL = 'claude-opus-4-8';
 export const DEFAULT_MAX_TOKENS = 8192;
-// Total context window (tokens) of the default model. GLM-5.2 (and real Claude
-// Opus 4.8) provide 1M; the assembled prompt is trimmed to fit within this minus
-// the reserved output. Lower to 200000 for a 200K-tier model such as GLM-4.6.
-export const DEFAULT_CONTEXT_WINDOW = 1000000;
+// Total context window (tokens) the prompt is trimmed to fit within (minus reserved
+// output). 200000 is safe for the GLM tier the default model maps to. Raise (e.g.
+// 1000000) only when the endpoint truly serves a 1M-context model.
+export const DEFAULT_CONTEXT_WINDOW = 200000;
 // Combined mode returns one large findings array; a higher floor avoids truncated JSON
 export const DEFAULT_COMBINED_MAX_TOKENS = 16384;
 export const DEFAULT_TEMPERATURE = 0.2;
