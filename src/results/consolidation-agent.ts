@@ -7,7 +7,7 @@ const CONSOLIDATION_SYSTEM_PROMPT = `You are a code review consolidation agent. 
 ## Rules
 
 1. **Identify duplicates**: Two findings about the SAME issue at the SAME location (same file, within 3 lines) are duplicates — even if worded differently by different agents.
-   - Example: "Missing JSDoc comment" (type-safety agent) and "Function lacks documentation" (code-quality agent) on the same function → merge into ONE finding.
+   - Example: "Missing return type" (type-safety agent) and "Function return type not declared" (code-quality agent) on the same function → merge into ONE finding.
    - Example: "Missing input validation" (security agent) and "No parameter type check" (code-quality agent) on the same line → merge into ONE finding.
 
 2. **Merge duplicates**:
@@ -42,7 +42,7 @@ Return a JSON object:
     }
   ],
   "mergeLog": [
-    "Merged findings #2 and #5: both flag missing JSDoc on processData()",
+    "Merged findings #2 and #5: both flag missing return type on processData()",
     "Merged findings #1, #3, #7: all flag missing validation on line 26"
   ]
 }

@@ -33,9 +33,15 @@ inputs:
     required: false
     default: '0.2'
 
-  # ─── Review Profile ─────────────────────────────────────
+  # ─── Review Mode ────────────────────────────────────────
+  review_mode:
+    description: 'combined (default): one comprehensive all-at-once review covering every category. separate: 7 parallel specialist agents selected by review_profile/toggles'
+    required: false
+    default: 'combined'
+
+  # ─── Review Profile (separate mode only) ─────────────────
   review_profile:
-    description: 'Review intensity: strict (all 7 agents), standard (5 agents), minimal (2 agents)'
+    description: 'Review intensity for separate mode: strict (all 7 agents), standard (5 agents), minimal (2 agents). Ignored in combined mode'
     required: false
     default: 'standard'
 
@@ -104,6 +110,18 @@ inputs:
     default: 'critical'
   post_inline_comments:
     description: 'Post inline review comments on specific diff lines'
+    required: false
+    default: 'true'
+  post_data_url:
+    description: 'Optional Backstage/webhook endpoint. When set, review metrics and all individual findings are POSTed as JSON after the review (fire-and-forget, never fails the action). See docs/backstage-integration.md'
+    required: false
+    default: ''
+  enable_reply_handling:
+    description: 'Verify human replies on previous review threads against the code, post a justification reply in each, and resolve the thread when the reply is valid'
+    required: false
+    default: 'true'
+  enable_bot_comment_cleanup:
+    description: 'Minimize noisy recurring bot comments (e.g. sonarqubecloud, unit-test-quality reports): known noise is hidden entirely, other recurring types keep only the latest occurrence'
     required: false
     default: 'true'
   max_files_to_review:
@@ -196,6 +214,14 @@ outputs:
     description: 'Comma-separated list of agents that failed (if any)'
   duration_seconds:
     description: 'Total review duration in seconds'
+  backstage_reported:
+    description: 'Whether review data was successfully POSTed to post_data_url (true/false, empty if post_data_url not set)'
+  replies_posted:
+    description: 'Number of justification replies posted on review threads that had human replies'
+  threads_resolved_from_replies:
+    description: 'Number of threads resolved because a human reply was verified as valid'
+  bot_comments_hidden:
+    description: 'Number of noisy bot comments minimized during cleanup'
 
 runs:
   using: 'docker'
@@ -207,6 +233,7 @@ runs:
     INPUT_ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
     INPUT_MAX_TOKENS: ${{ inputs.max_tokens }}
     INPUT_TEMPERATURE: ${{ inputs.temperature }}
+    INPUT_REVIEW_MODE: ${{ inputs.review_mode }}
     INPUT_REVIEW_PROFILE: ${{ inputs.review_profile }}
     INPUT_ENABLE_SECURITY_REVIEW: ${{ inputs.enable_security_review }}
     INPUT_ENABLE_CODE_QUALITY_REVIEW: ${{ inputs.enable_code_quality_review }}
@@ -223,6 +250,9 @@ runs:
     INPUT_FAIL_ON_CRITICAL: ${{ inputs.fail_on_critical }}
     INPUT_FAIL_THRESHOLD: ${{ inputs.fail_threshold }}
     INPUT_POST_INLINE_COMMENTS: ${{ inputs.post_inline_comments }}
+    INPUT_POST_DATA_URL: ${{ inputs.post_data_url }}
+    INPUT_ENABLE_REPLY_HANDLING: ${{ inputs.enable_reply_handling }}
+    INPUT_ENABLE_BOT_COMMENT_CLEANUP: ${{ inputs.enable_bot_comment_cleanup }}
     INPUT_MAX_FILES_TO_REVIEW: ${{ inputs.max_files_to_review }}
     INPUT_EXCLUDE_PATTERNS: ${{ inputs.exclude_patterns }}
     INPUT_INCLUDE_PATTERNS: ${{ inputs.include_patterns }}

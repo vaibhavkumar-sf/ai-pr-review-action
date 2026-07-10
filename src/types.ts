@@ -1,6 +1,7 @@
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'nit';
-export type ReviewCategory = 'security' | 'code-quality' | 'performance' | 'type-safety' | 'architecture' | 'testing' | 'api-design';
+export type ReviewCategory = 'security' | 'code-quality' | 'performance' | 'type-safety' | 'architecture' | 'testing' | 'api-design' | 'comprehensive';
 export type ReviewProfile = 'strict' | 'standard' | 'minimal';
+export type ReviewMode = 'separate' | 'combined';
 export type Framework = 'angular' | 'loopback4' | 'both' | 'auto' | 'generic';
 export type FailThreshold = 'critical' | 'high' | 'medium';
 
@@ -91,6 +92,7 @@ export interface ActionConfig {
 
   // Profile & toggles
   reviewProfile: ReviewProfile;
+  reviewMode: ReviewMode;
   enabledAgents: Set<ReviewCategory>;
 
   // Framework
@@ -106,6 +108,9 @@ export interface ActionConfig {
   failOnCritical: boolean;
   failThreshold: FailThreshold;
   postInlineComments: boolean;
+  postDataUrl: string;
+  enableReplyHandling: boolean;
+  enableBotCommentCleanup: boolean;
   maxFilesToReview: number;
   excludePatterns: string[];
   includePatterns: string[];

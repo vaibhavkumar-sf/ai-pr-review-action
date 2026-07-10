@@ -20,7 +20,7 @@ export abstract class BaseAgent {
     try {
       const messages = this.buildMessages(context);
       const response = await this.provider.chat(messages, {
-        maxTokens: this.config.maxTokens,
+        maxTokens: this.getMaxTokens(),
         temperature: this.config.temperature,
         timeout: this.config.agentTimeout * 1000,
       });
@@ -47,6 +47,10 @@ export abstract class BaseAgent {
         error: errMsg,
       };
     }
+  }
+
+  protected getMaxTokens(): number {
+    return this.config.maxTokens;
   }
 
   protected buildMessages(context: ReviewContext): ChatMessage[] {
@@ -85,6 +89,13 @@ export abstract class BaseAgent {
     } else if (this.config.systemPromptAppend) {
       prompt += '\n\n## Additional Instructions (from user)\n' + this.config.systemPromptAppend;
     }
+
+    // Global rules applied to every agent, regardless of category or prompt file
+    prompt += '\n\n## Global Review Rules (apply to ALL findings)\n';
+    prompt += '- Be exhaustive: walk your full checklist for every changed file; do not skim or stop early. When in doubt, flag the issue with severity `low` or `nit` rather than staying silent.\n';
+    prompt += '- ONE finding per distinct issue. Never collapse multiple distinct issues at the same location into one finding.\n';
+    prompt += '- DO NOT flag missing JSDoc/TSDoc/doc comments. Missing return types, missing parameter types, and loose `any` types ARE still in scope — only the doc-comment subset is suppressed. Only flag an EXISTING comment if it actively contradicts the code.\n';
+    prompt += '- DO NOT create findings located inside unit test files (`*.unit.ts`, `*.spec.ts`, `*.test.ts`, files under `__tests__/unit/`). Read them to verify coverage, but place missing-coverage findings on the production file they should cover.\n';
 
     // Add CLAUDE.md context if available
     if (context.repoContext.claudeMdContent) {
@@ -214,6 +225,15 @@ export abstract class BaseAgent {
     return '';
   }
 
+  /**
+   * Maps a finding's raw category from the model response to a ReviewCategory.
+   * Specialist agents own a single category; the comprehensive agent overrides
+   * this to preserve the per-finding category the model assigned.
+   */
+  protected resolveCategory(_raw: unknown): ReviewCategory {
+    return this.category;
+  }
+
   protected parseResponse(content: string): { findings: Finding[]; summary: string; score: number } {
     try {
       // Try to extract JSON from the response (may be wrapped in markdown code blocks)
@@ -233,7 +253,7 @@ export abstract class BaseAgent {
 
       const findings: Finding[] = (parsed.findings || []).map((f: Record<string, unknown>) => ({
         severity: validSeverities.has(f.severity as string) ? f.severity as Finding['severity'] : 'medium',
-        category: this.category,
+        category: this.resolveCategory(f.category),
         file: f.file || '',
         line: f.line || 0,
         endLine: f.endLine || f.end_line,

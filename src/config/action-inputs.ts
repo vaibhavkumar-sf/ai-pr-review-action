@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import { ActionConfig, ReviewCategory, ReviewProfile, Framework, FailThreshold } from '../types';
-import { ProfileMap, getEnabledAgents } from './profiles';
+import { ActionConfig, ReviewProfile, ReviewMode, Framework, FailThreshold } from '../types';
+import { ProfileMap, SpecialistCategory, getEnabledAgents } from './profiles';
 import { buildDefaultConfig, DEFAULT_EXCLUDE_PATTERNS } from './defaults';
 
 function getInputOrDefault(name: string, defaultValue: string): string {
@@ -32,6 +32,12 @@ function parseReviewProfile(raw: string): ReviewProfile {
   return valid.includes(lower) ? lower : 'standard';
 }
 
+function parseReviewMode(raw: string): ReviewMode {
+  const valid: ReviewMode[] = ['separate', 'combined'];
+  const lower = raw.toLowerCase() as ReviewMode;
+  return valid.includes(lower) ? lower : 'combined';
+}
+
 function parseFramework(raw: string): Framework {
   const valid: Framework[] = ['angular', 'loopback4', 'both', 'auto', 'generic'];
   const lower = raw.toLowerCase() as Framework;
@@ -45,7 +51,7 @@ function parseFailThreshold(raw: string): FailThreshold {
 }
 
 function resolveAgentOverrides(): Partial<ProfileMap> | undefined {
-  const agentToggleMap: Record<string, ReviewCategory> = {
+  const agentToggleMap: Record<string, SpecialistCategory> = {
     'enable_security_review': 'security',
     'enable_code_quality_review': 'code-quality',
     'enable_performance_review': 'performance',
@@ -93,8 +99,13 @@ export function parseActionInputs(): ActionConfig {
   const { owner, repo } = resolveOwnerRepo();
 
   const profile = parseReviewProfile(getInputOrDefault('review_profile', defaults.reviewProfile));
+  const reviewMode = parseReviewMode(getInputOrDefault('review_mode', defaults.reviewMode));
   const agentOverrides = resolveAgentOverrides();
   const enabledAgents = getEnabledAgents(profile, agentOverrides);
+
+  if (reviewMode === 'combined' && (core.getInput('review_profile') || agentOverrides)) {
+    core.info('review_mode is "combined": review_profile and enable_*_review toggles are ignored (a single comprehensive agent runs). Set review_mode: separate to use them.');
+  }
 
   const excludeRaw = core.getInput('exclude_patterns');
   const excludePatterns = excludeRaw
@@ -117,6 +128,7 @@ export function parseActionInputs(): ActionConfig {
 
     // Profile & toggles
     reviewProfile: profile,
+    reviewMode,
     enabledAgents,
 
     // Framework
@@ -132,6 +144,9 @@ export function parseActionInputs(): ActionConfig {
     failOnCritical: getBooleanInput('fail_on_critical', defaults.failOnCritical),
     failThreshold: parseFailThreshold(getInputOrDefault('fail_threshold', defaults.failThreshold)),
     postInlineComments: getBooleanInput('post_inline_comments', defaults.postInlineComments),
+    postDataUrl: core.getInput('post_data_url'),
+    enableReplyHandling: getBooleanInput('enable_reply_handling', defaults.enableReplyHandling),
+    enableBotCommentCleanup: getBooleanInput('enable_bot_comment_cleanup', defaults.enableBotCommentCleanup),
     maxFilesToReview: getNumberInput('max_files_to_review', defaults.maxFilesToReview),
     excludePatterns,
     includePatterns: parseCommaSeparated(core.getInput('include_patterns')),

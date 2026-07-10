@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import { ReviewCategory } from '../types';
 import { INLINE_COMMENT_MARKER } from './inline-reviewer';
+import { BOT_HIDE_ALL_PATTERNS } from '../config/defaults';
 
 const COMMENT_MARKER = '<!-- ai-pr-review-action-comment -->';
 
@@ -18,6 +19,7 @@ const AGENT_LABELS: Record<ReviewCategory, string> = {
   'architecture': '\uD83C\uDFD7\uFE0F Architecture',
   'testing': '\uD83E\uDDEA Testing',
   'api-design': '\uD83D\uDD0C API Design',
+  'comprehensive': '\uD83D\uDD0E Comprehensive Review',
 };
 
 export class PRCommenter {
@@ -117,7 +119,7 @@ export class PRCommenter {
                 isResolved: boolean;
                 comments: {
                   nodes: Array<{
-                    author: { login: string };
+                    author: { login: string } | null;
                     body: string;
                     path: string;
                     line: number | null;
@@ -135,7 +137,7 @@ export class PRCommenter {
                 nodes {
                   id
                   isResolved
-                  comments(first: 1) {
+                  comments(first: 30) {
                     nodes {
                       author { login }
                       body
@@ -163,9 +165,16 @@ export class PRCommenter {
         if (!firstComment) continue;
 
         const isOurs = firstComment.body.includes(INLINE_COMMENT_MARKER) ||
-          firstComment.author.login === user ||
-          firstComment.author.login === botLoginVariant;
+          firstComment.author?.login === user ||
+          firstComment.author?.login === botLoginVariant;
         if (!isOurs) continue;
+
+        // A human replied after our last message — the reply handler owns this
+        // thread now; never auto-resolve it out from under the conversation
+        const lastComment = thread.comments.nodes[thread.comments.nodes.length - 1];
+        const lastLogin = lastComment.author?.login ?? '';
+        const lastIsHuman = lastLogin !== user && lastLogin !== botLoginVariant && !lastLogin.endsWith('[bot]');
+        if (lastIsHuman) continue;
 
         ourThreads.push({
           id: thread.id,
@@ -218,7 +227,7 @@ export class PRCommenter {
     return resolved;
   }
 
-  private async resolveThread(threadId: string): Promise<number> {
+  async resolveThread(threadId: string): Promise<number> {
     try {
       await this.octokit.graphql(`
         mutation($threadId: ID!) {
@@ -247,6 +256,127 @@ export class PRCommenter {
       case 'failed':
         return '\u274C Failed';
     }
+  }
+
+  /**
+   * Minimize noisy recurring bot comments on the PR:
+   * - Comments matching BOT_HIDE_ALL_PATTERNS are hidden on every occurrence.
+   * - Any other recurring bot comment type (grouped by bot login + first
+   *   heading line) keeps only the latest occurrence; older ones are hidden.
+   *
+   * Our own marker comments are never touched (they're handled by
+   * minimizeOldSummaryComments), and already-minimized comments are skipped.
+   */
+  async cleanupBotComments(): Promise<number> {
+    let hidden = 0;
+
+    try {
+      interface PrCommentNode {
+        id: string;
+        isMinimized: boolean;
+        createdAt: string;
+        body: string;
+        author: { login: string } | null;
+      }
+
+      const allComments: PrCommentNode[] = [];
+      let cursor: string | null = null;
+
+      do {
+        const page: {
+          repository: {
+            pullRequest: {
+              comments: {
+                nodes: PrCommentNode[];
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+              };
+            };
+          };
+        } = await this.octokit.graphql(`
+          query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+            repository(owner: $owner, name: $repo) {
+              pullRequest(number: $number) {
+                comments(first: 100, after: $cursor) {
+                  nodes {
+                    id
+                    isMinimized
+                    createdAt
+                    body
+                    author { login }
+                  }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }
+          }
+        `, { owner: this.owner, repo: this.repo, number: this.prNumber, cursor });
+
+        const connection = page.repository.pullRequest.comments;
+        allComments.push(...connection.nodes);
+        cursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null;
+      } while (cursor);
+
+      // GraphQL author logins have no '[bot]' suffix; bots are typed as "Bot"
+      // but login-based matching covers the common CI bots reliably
+      const BOT_LOGINS = /(\[bot\]$|^github-actions$|^sonarqubecloud$|^sonarcloud$|^dependabot$|^renovate$)/;
+      const botComments = allComments.filter(c =>
+        !c.isMinimized &&
+        BOT_LOGINS.test(c.author?.login ?? '') &&
+        !c.body.includes(COMMENT_MARKER),
+      );
+
+      const toHide: PrCommentNode[] = [];
+      const recurring = new Map<string, PrCommentNode[]>();
+
+      for (const comment of botComments) {
+        if (BOT_HIDE_ALL_PATTERNS.some(pattern => comment.body.includes(pattern))) {
+          toHide.push(comment);
+          continue;
+        }
+        // Group recurring types by bot login + normalized first heading line
+        const heading = (comment.body.split('\n').find(l => l.trim()) ?? '')
+          .replace(/[#*_`\u{1F300}-\u{1FAFF}✀-➿]/gu, '')
+          .trim()
+          .toLowerCase()
+          .substring(0, 60);
+        const key = `${comment.author?.login ?? ''}|${heading}`;
+        const group = recurring.get(key) ?? [];
+        group.push(comment);
+        recurring.set(key, group);
+      }
+
+      // Keep only the latest of each recurring type
+      for (const group of recurring.values()) {
+        if (group.length < 2) continue;
+        group.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        toHide.push(...group.slice(0, -1));
+      }
+
+      for (const comment of toHide) {
+        try {
+          await this.octokit.graphql(`
+            mutation($id: ID!) {
+              minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+                minimizedComment { isMinimized }
+              }
+            }
+          `, { id: comment.id });
+          hidden++;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          core.debug(`Failed to minimize bot comment: ${msg}`);
+        }
+      }
+
+      if (hidden > 0) {
+        core.info(`Minimized ${hidden} noisy bot comment(s)`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      core.warning(`Bot comment cleanup failed: ${msg}`);
+    }
+
+    return hidden;
   }
 
   /**
@@ -289,7 +419,7 @@ export class PRCommenter {
     }
   }
 
-  private async getAuthenticatedUser(): Promise<string | null> {
+  async getAuthenticatedUser(): Promise<string | null> {
     if (this.authenticatedUser) return this.authenticatedUser;
     try {
       const { data } = await this.octokit.users.getAuthenticated();

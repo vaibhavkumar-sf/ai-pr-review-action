@@ -2,7 +2,14 @@
 
 ## 1. Overview
 
-**`sourcefuse/ai-pr-review-action`** is a GitHub Action that performs comprehensive, AI-powered code reviews on pull requests. It launches parallel specialist review agents — each focused on a specific quality dimension — and merges their findings into a single, structured PR comment with inline code annotations.
+**`sourcefuse/ai-pr-review-action`** is a GitHub Action that performs comprehensive, AI-powered code reviews on pull requests. It reviews every quality dimension and merges the findings into a single, structured PR comment with inline code annotations.
+
+### Review Modes (`review_mode` input)
+
+- **`combined` (default)** — a single `ComprehensiveAgent` reviews all dimensions at once using `prompts/comprehensive.md`. The model tags each finding with its own category (`security`, `performance`, …), preserved by `ComprehensiveAgent.resolveCategory()`. Because there is only one agent, the AI consolidation pass is skipped (programmatic dedup still runs), and the agent floors `max_tokens` at 16384 so the large findings JSON is never truncated.
+- **`separate`** — the original architecture: parallel specialist review agents selected by `review_profile`/toggles, each focused on one dimension, followed by programmatic dedup + an AI consolidation pass.
+
+Both modes share the same downstream pipeline: merge → summary comment (severity + category tables) → inline comments (critical/high/medium, never on unit test files) → Mermaid diagrams in the PR description → optional Backstage report (`src/results/backstage-reporter.ts`, see `docs/backstage-integration.md`).
 
 ### Key Design Principles
 

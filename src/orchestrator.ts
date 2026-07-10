@@ -7,9 +7,12 @@ import { createAIProvider } from './providers/provider-factory';
 import { createAgents } from './agents';
 import { PRCommenter } from './github/pr-commenter';
 import { InlineReviewer } from './github/inline-reviewer';
+import { ReplyHandler } from './github/reply-handler';
 import { parseDiff } from './github/diff-parser';
-import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, generateArchitectureDiagram } from './results';
+import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, formatTrackingMetrics, generateArchitectureDiagram } from './results';
 import { generateDiagramImages, validateMermaid } from './results/image-diagram-generator';
+import { reportToBackstage, RunActivityStats } from './results/backstage-reporter';
+import { isTestFile } from './config/defaults';
 import { logger } from './utils/logger';
 
 /**
@@ -35,6 +38,13 @@ export async function runReview(config: ActionConfig): Promise<void> {
     '## \u23F3 AI Code Review\n\nReview starting... gathering context.',
   );
   logger.info('Posted initial progress comment');
+
+  // 2b. Hide noisy recurring bot comments (own summaries handled separately)
+  let botCommentsHidden = 0;
+  if (config.enableBotCommentCleanup) {
+    botCommentsHidden = await commenter.cleanupBotComments();
+  }
+  core.setOutput('bot_comments_hidden', botCommentsHidden);
 
   // 3. Gather all context
   let context: ReviewContext;
@@ -132,26 +142,36 @@ export async function runReview(config: ActionConfig): Promise<void> {
     }
   }
 
-  // 8. Deduplicate findings: programmatic pass first, then AI consolidation
+  // 8. Deduplicate findings: programmatic pass first, then AI consolidation.
+  // Combined mode has a single agent, so there are no cross-agent duplicates
+  // and the AI consolidation pass is skipped.
   const allFindings = agentResults.flatMap(r => r.findings);
   const deduplicated = deduplicateFindings(allFindings);
 
-  // AI consolidation pass — catches semantic duplicates that string matching misses
-  await commenter.postOrUpdateComment(
-    '## \uD83D\uDD0D AI Code Review\n\n\u2705 All agents complete. Consolidating findings...',
-  );
-  const consolidated = await consolidateFindings(
-    deduplicated,
-    provider,
-    config.agentTimeout * 1000,
-  );
+  let consolidated = deduplicated;
+  if (config.reviewMode !== 'combined') {
+    // AI consolidation pass — catches semantic duplicates that string matching misses
+    await commenter.postOrUpdateComment(
+      '## \uD83D\uDD0D AI Code Review\n\n\u2705 All agents complete. Consolidating findings...',
+    );
+    consolidated = await consolidateFindings(
+      deduplicated,
+      provider,
+      config.agentTimeout * 1000,
+    );
+  }
 
-  // Replace findings in agent results with consolidated versions
-  // (distribute consolidated findings back to their original agents)
-  const consolidatedResults = agentResults.map(r => ({
-    ...r,
-    findings: consolidated.filter(f => f.category === r.category),
-  }));
+  // Replace findings in agent results with consolidated versions.
+  // In separate mode, distribute consolidated findings back to their original
+  // agents by category. In combined mode the single comprehensive agent owns
+  // every finding (findings carry per-finding sub-categories, so a category
+  // filter would drop them all).
+  const consolidatedResults = config.reviewMode === 'combined'
+    ? agentResults.map(r => ({ ...r, findings: consolidated }))
+    : agentResults.map(r => ({
+        ...r,
+        findings: consolidated.filter(f => f.category === r.category),
+      }));
 
   const merged = mergeResults(consolidatedResults, config);
 
@@ -168,13 +188,33 @@ export async function runReview(config: ActionConfig): Promise<void> {
   core.setOutput('review_comment_id', commentId);
   core.setOutput('review_comment_url', commentUrl);
 
-  // 10. Resolve stale inline comments from previous runs, then post new ones
+  // 10. Handle human replies on previous threads, resolve stale inline
+  // comments from previous runs, then post new ones
+  let repliesPosted = 0;
+  let threadsResolvedFromReplies = 0;
+  if (config.enableReplyHandling) {
+    try {
+      const replyHandler = new ReplyHandler(octokit, commenter, provider, config);
+      const replyResult = await replyHandler.processReplies(context);
+      repliesPosted = replyResult.repliesPosted;
+      threadsResolvedFromReplies = replyResult.threadsResolved;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      core.warning(`Reply handling failed: ${msg}`);
+    }
+  }
+  core.setOutput('replies_posted', repliesPosted);
+  core.setOutput('threads_resolved_from_replies', threadsResolvedFromReplies);
+
+  let staleThreadsResolved = 0;
+  let inlineCommentsNew = 0;
+  let inlineCommentsExisting = 0;
   if (config.postInlineComments) {
     // Resolve old inline comments that are no longer relevant
     const currentFindingSummary = consolidated.map(f => ({
       file: f.file, line: f.line, title: f.title,
     }));
-    await commenter.resolveStaleInlineComments(currentFindingSummary);
+    staleThreadsResolved = await commenter.resolveStaleInlineComments(currentFindingSummary);
 
     // Post new inline comments for critical, high, and medium findings
     if (merged.totalFindings > 0) {
@@ -182,19 +222,41 @@ export async function runReview(config: ActionConfig): Promise<void> {
         const parsedDiffs = parseDiff(context.diff);
         const inlineReviewer = new InlineReviewer(octokit, config.owner, config.repo, config.prNumber);
 
+        // Inline comments never go on unit test files (findings remain in the
+        // summary comment) — mirrors the prompt-level suppression as a hard guard
         const inlineFindings = consolidated.filter(
-          f => f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium',
+          f => (f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium') &&
+            !isTestFile(f.file),
         );
 
         if (inlineFindings.length > 0) {
-          const posted = await inlineReviewer.postReview(inlineFindings, context.headSha, parsedDiffs);
-          logger.info(`Posted ${posted} inline review comments`);
+          inlineCommentsNew = await inlineReviewer.postReview(inlineFindings, context.headSha, parsedDiffs);
+          inlineCommentsExisting = Math.max(0, inlineFindings.length - inlineCommentsNew);
+          logger.info(`Posted ${inlineCommentsNew} inline review comments (${inlineCommentsExisting} already existed)`);
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         core.warning(`Failed to post inline comments: ${msg}`);
       }
     }
+  }
+
+  const activity: RunActivityStats = {
+    inlineCommentsNew,
+    inlineCommentsExisting,
+    staleThreadsResolved,
+    repliesPosted,
+    threadsResolvedFromReplies,
+    botCommentsHidden,
+  };
+
+  // Append the Backstage tracking metrics table to the summary comment now
+  // that all comment-lifecycle actions for this run are done
+  try {
+    await commenter.postOrUpdateComment(finalComment + formatTrackingMetrics(merged, config, activity));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    core.warning(`Failed to append tracking metrics to summary comment: ${msg}`);
   }
 
   // 11. Append AI summary to PR description (below ----AI-description---- separator)
@@ -219,7 +281,13 @@ export async function runReview(config: ActionConfig): Promise<void> {
   core.setOutput('agents_run', agents.map(a => a.name).join(','));
   core.setOutput('agents_failed', agentResults.filter(r => r.error).map(r => r.agentName).join(','));
 
-  // 13. Fail the action if threshold is breached
+  // 13. Report review data to Backstage (fire-and-forget, never fails the action)
+  if (config.postDataUrl) {
+    const reported = await reportToBackstage(config, merged, context, agentResults, activity);
+    core.setOutput('backstage_reported', reported);
+  }
+
+  // 14. Fail the action if threshold is breached
   if (config.failOnCritical && !merged.passed) {
     const failMsg =
       `Review failed: found ${merged.criticalCount} critical, ${merged.highCount} high, ` +
@@ -344,7 +412,8 @@ async function appendToPRDescription(
   if (merged.lowCount > 0) aiParts.push(`| \uD83D\uDFE2 Low | ${merged.lowCount} |`);
   if (merged.totalFindings === 0) aiParts.push('| \u2705 None | 0 |');
   aiParts.push('');
-  aiParts.push(`<sub>Last reviewed: ${new Date().toISOString()} | Model: ${config.anthropicModel} | Profile: ${config.reviewProfile}</sub>`);
+  const profileMeta = config.reviewMode === 'separate' ? ` | Profile: ${config.reviewProfile}` : '';
+  aiParts.push(`<sub>Last reviewed: ${new Date().toISOString()} | Model: ${config.anthropicModel} | Mode: ${config.reviewMode}${profileMeta}</sub>`);
 
   const newBody = userDescription + '\n' + aiParts.join('\n');
 
