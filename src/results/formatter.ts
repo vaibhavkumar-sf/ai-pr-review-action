@@ -1,5 +1,6 @@
 import { ActionConfig, AgentResult, Finding, MergedReviewResult, ReviewCategory, ReviewContext, Severity } from '../types';
 import { generateArchitectureDiagram } from './diagram-generator';
+import { RunActivityStats } from './backstage-reporter';
 
 const SEVERITY_ICONS: Record<Severity, string> = {
   critical: '\uD83D\uDED1',
@@ -217,6 +218,55 @@ export function formatReviewComment(
     '<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) \u2014 automated code review with multi-agent AI</sub>',
   );
   parts.push('');
+
+  return parts.join('\n');
+}
+
+/**
+ * Formats the "Backstage Tracking Metrics" section appended to the summary
+ * comment after all comment-lifecycle actions complete. It mirrors exactly
+ * what is POSTed to the Backstage tracker — every severity count, every
+ * category count, and this run's lifecycle activity.
+ */
+export function formatTrackingMetrics(
+  result: MergedReviewResult,
+  config: ActionConfig,
+  activity: RunActivityStats,
+): string {
+  const parts: string[] = [];
+
+  parts.push('');
+  parts.push('### 📊 Backstage Tracking Metrics');
+  parts.push('');
+  parts.push('| Metric | Count |');
+  parts.push('|--------|-------|');
+  parts.push(`| **Total findings** | **${result.totalFindings}** |`);
+  parts.push(`| ${SEVERITY_ICONS.critical} Critical | ${result.criticalCount} |`);
+  parts.push(`| ${SEVERITY_ICONS.high} High | ${result.highCount} |`);
+  parts.push(`| ${SEVERITY_ICONS.medium} Medium | ${result.mediumCount} |`);
+  parts.push(`| ${SEVERITY_ICONS.low} Low | ${result.lowCount} |`);
+  parts.push(`| ${SEVERITY_ICONS.nit} Nit | ${result.nitCount} |`);
+
+  const categoryCounts = new Map<ReviewCategory, number>(countByCategory(result.findings));
+  const ALL_CATEGORIES: ReviewCategory[] = [
+    'security', 'code-quality', 'performance', 'type-safety', 'architecture', 'testing', 'api-design',
+  ];
+  for (const category of ALL_CATEGORIES) {
+    parts.push(`| ${CATEGORY_LABELS[category]} | ${categoryCounts.get(category) ?? 0} |`);
+  }
+
+  parts.push(`| 🆕 New inline comments (this run) | ${activity.inlineCommentsNew} |`);
+  parts.push(`| ♻️ Carried-over comments (already posted) | ${activity.inlineCommentsExisting} |`);
+  parts.push(`| ✅ Threads resolved (fixed in code) | ${activity.staleThreadsResolved} |`);
+  parts.push(`| 💬 Replies posted (to human replies) | ${activity.repliesPosted} |`);
+  parts.push(`| ☑️ Threads resolved from valid replies | ${activity.threadsResolvedFromReplies} |`);
+  parts.push(`| 🤖 Bot comments hidden | ${activity.botCommentsHidden} |`);
+  parts.push('');
+
+  if (config.postDataUrl) {
+    parts.push('<sub>Reported to the Backstage tracker — each review run is stored as a separate row, so re-reviews of this PR are tracked individually.</sub>');
+    parts.push('');
+  }
 
   return parts.join('\n');
 }

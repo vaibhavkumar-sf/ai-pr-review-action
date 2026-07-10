@@ -18,6 +18,21 @@ interface BackstageFinding {
   has_code_suggestion: boolean;
 }
 
+/**
+ * Per-run comment-lifecycle activity. Every review run is stored as a
+ * separate row in the Backstage tracker, so these counts let a dashboard
+ * reconstruct the full story of a PR across re-pushes (e.g. run 1: 10 new
+ * findings; run 2: 2 resolved, 8 carried over, 4 new, 4 replies answered).
+ */
+export interface RunActivityStats {
+  inlineCommentsNew: number;
+  inlineCommentsExisting: number;
+  staleThreadsResolved: number;
+  repliesPosted: number;
+  threadsResolvedFromReplies: number;
+  botCommentsHidden: number;
+}
+
 export interface BackstageReviewPayload {
   // Run / PR metadata
   repo_name: string;
@@ -61,6 +76,14 @@ export interface BackstageReviewPayload {
   files_reviewed: number;
   duration_seconds: number;
 
+  // Per-run comment lifecycle activity (see RunActivityStats)
+  inline_comments_new: number;
+  inline_comments_existing: number;
+  stale_threads_resolved: number;
+  replies_posted: number;
+  threads_resolved_from_replies: number;
+  bot_comments_hidden: number;
+
   // Full per-finding detail
   findings: BackstageFinding[];
 }
@@ -77,8 +100,9 @@ export async function reportToBackstage(
   merged: MergedReviewResult,
   context: ReviewContext,
   agentResults: AgentResult[],
+  activity: RunActivityStats,
 ): Promise<boolean> {
-  const payload = buildPayload(config, merged, context, agentResults);
+  const payload = buildPayload(config, merged, context, agentResults, activity);
 
   try {
     const controller = new AbortController();
@@ -111,6 +135,7 @@ function buildPayload(
   merged: MergedReviewResult,
   context: ReviewContext,
   agentResults: AgentResult[],
+  activity: RunActivityStats,
 ): BackstageReviewPayload {
   const categoryCounts = countByCategory(merged.findings);
   const scoredAgents = agentResults.filter(r => !r.error);
@@ -157,6 +182,13 @@ function buildPayload(
     agents_failed: agentResults.filter(r => r.error).map(r => r.agentName).join(','),
     files_reviewed: context.changedFiles.length,
     duration_seconds: Math.round(merged.durationMs / 1000),
+
+    inline_comments_new: activity.inlineCommentsNew,
+    inline_comments_existing: activity.inlineCommentsExisting,
+    stale_threads_resolved: activity.staleThreadsResolved,
+    replies_posted: activity.repliesPosted,
+    threads_resolved_from_replies: activity.threadsResolvedFromReplies,
+    bot_comments_hidden: activity.botCommentsHidden,
 
     findings: merged.findings.map(toBackstageFinding),
   };

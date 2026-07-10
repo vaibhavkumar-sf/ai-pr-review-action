@@ -69,6 +69,13 @@ One JSON object per review run. All keys are snake_case.
   "files_reviewed": 14,
   "duration_seconds": 187,
 
+  "inline_comments_new": 4,
+  "inline_comments_existing": 8,
+  "stale_threads_resolved": 2,
+  "replies_posted": 4,
+  "threads_resolved_from_replies": 1,
+  "bot_comments_hidden": 3,
+
   "findings": [
     {
       "category": "security",
@@ -95,12 +102,30 @@ Field notes:
 | `*_count` (category) | int | One counter per category; sum equals `total_findings`. Categories are always the 7 specialist ones — in combined mode each finding still carries its own category |
 | `average_score` | float | Mean of agent scores (0–10, one decimal). In combined mode this is the single comprehensive agent's score |
 | `agents_run` / `agents_failed` | string | Comma-separated agent names (`comprehensive` in combined mode) |
+| `inline_comments_new` | int | Inline comments actually posted this run (genuinely new findings) |
+| `inline_comments_existing` | int | Inline-eligible findings that already had a comment from a previous run (carried over) |
+| `stale_threads_resolved` | int | Threads auto-resolved this run because the issue is fixed / no longer reported |
+| `replies_posted` | int | Justification replies posted in threads where a human had replied |
+| `threads_resolved_from_replies` | int | Threads resolved because the human's reply was verified as valid |
+| `bot_comments_hidden` | int | Noisy bot comments minimized during cleanup |
 | `findings[].category` | string | `security`, `code-quality`, `performance`, `type-safety`, `architecture`, `testing`, `api-design` |
 | `findings[].severity` | string | `critical`, `high`, `medium`, `low`, `nit` |
 | `findings[].suggestion` | string \| null | Free-text fix guidance |
 | `findings[].has_code_suggestion` | bool | Whether a committable GitHub suggestion was attached to the finding |
 
 The payload is not sent when the review is skipped (`too_many_files` / `no_agents`) — only completed reviews are reported.
+
+### Re-review tracking — one row per run
+
+**Every review run is a separate row** — the action never updates a previous report. On GitHub the old summary comment is minimized and replaced (the PR stays clean), but in Backstage the full history is preserved, so a dashboard can reconstruct the complete story of a PR:
+
+| Run | What the row shows |
+|-----|--------------------|
+| Run 1 (PR opened) | `total_findings: 10`, `inline_comments_new: 10`, everything else 0 |
+| Run 2 (re-push) | `stale_threads_resolved: 2` (fixed in code), `inline_comments_existing: 8` (still open), `inline_comments_new: 4` (new issues), `replies_posted: 4` (humans pushed back, all answered), `threads_resolved_from_replies: 1` |
+| Run 3 (re-push) | ... and so on |
+
+Group rows by `repo_name` + `pr_number` (ordered by `run_timestamp`) to get "this PR was reviewed 3 times"; `head_sha` distinguishes the exact commit each run reviewed. The same metrics table is also posted on the PR itself (the "📊 Backstage Tracking Metrics" section of the summary comment), so reviewers see exactly what was recorded.
 
 ## Suggested database schema
 
@@ -146,6 +171,12 @@ CREATE TABLE ai_code_reviews (
   agents_failed         TEXT,
   files_reviewed        INTEGER,
   duration_seconds      INTEGER,
+  inline_comments_new   INTEGER       NOT NULL DEFAULT 0,
+  inline_comments_existing INTEGER    NOT NULL DEFAULT 0,
+  stale_threads_resolved INTEGER      NOT NULL DEFAULT 0,
+  replies_posted        INTEGER       NOT NULL DEFAULT 0,
+  threads_resolved_from_replies INTEGER NOT NULL DEFAULT 0,
+  bot_comments_hidden   INTEGER       NOT NULL DEFAULT 0,
   run_timestamp         TIMESTAMPTZ   NOT NULL,
   created_at            TIMESTAMPTZ   NOT NULL DEFAULT now()
 );

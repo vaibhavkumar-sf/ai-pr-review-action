@@ -9,9 +9,9 @@ import { PRCommenter } from './github/pr-commenter';
 import { InlineReviewer } from './github/inline-reviewer';
 import { ReplyHandler } from './github/reply-handler';
 import { parseDiff } from './github/diff-parser';
-import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, generateArchitectureDiagram } from './results';
+import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, formatTrackingMetrics, generateArchitectureDiagram } from './results';
 import { generateDiagramImages, validateMermaid } from './results/image-diagram-generator';
-import { reportToBackstage } from './results/backstage-reporter';
+import { reportToBackstage, RunActivityStats } from './results/backstage-reporter';
 import { isTestFile } from './config/defaults';
 import { logger } from './utils/logger';
 
@@ -206,12 +206,15 @@ export async function runReview(config: ActionConfig): Promise<void> {
   core.setOutput('replies_posted', repliesPosted);
   core.setOutput('threads_resolved_from_replies', threadsResolvedFromReplies);
 
+  let staleThreadsResolved = 0;
+  let inlineCommentsNew = 0;
+  let inlineCommentsExisting = 0;
   if (config.postInlineComments) {
     // Resolve old inline comments that are no longer relevant
     const currentFindingSummary = consolidated.map(f => ({
       file: f.file, line: f.line, title: f.title,
     }));
-    await commenter.resolveStaleInlineComments(currentFindingSummary);
+    staleThreadsResolved = await commenter.resolveStaleInlineComments(currentFindingSummary);
 
     // Post new inline comments for critical, high, and medium findings
     if (merged.totalFindings > 0) {
@@ -227,14 +230,33 @@ export async function runReview(config: ActionConfig): Promise<void> {
         );
 
         if (inlineFindings.length > 0) {
-          const posted = await inlineReviewer.postReview(inlineFindings, context.headSha, parsedDiffs);
-          logger.info(`Posted ${posted} inline review comments`);
+          inlineCommentsNew = await inlineReviewer.postReview(inlineFindings, context.headSha, parsedDiffs);
+          inlineCommentsExisting = Math.max(0, inlineFindings.length - inlineCommentsNew);
+          logger.info(`Posted ${inlineCommentsNew} inline review comments (${inlineCommentsExisting} already existed)`);
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         core.warning(`Failed to post inline comments: ${msg}`);
       }
     }
+  }
+
+  const activity: RunActivityStats = {
+    inlineCommentsNew,
+    inlineCommentsExisting,
+    staleThreadsResolved,
+    repliesPosted,
+    threadsResolvedFromReplies,
+    botCommentsHidden,
+  };
+
+  // Append the Backstage tracking metrics table to the summary comment now
+  // that all comment-lifecycle actions for this run are done
+  try {
+    await commenter.postOrUpdateComment(finalComment + formatTrackingMetrics(merged, config, activity));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    core.warning(`Failed to append tracking metrics to summary comment: ${msg}`);
   }
 
   // 11. Append AI summary to PR description (below ----AI-description---- separator)
@@ -261,7 +283,7 @@ export async function runReview(config: ActionConfig): Promise<void> {
 
   // 13. Report review data to Backstage (fire-and-forget, never fails the action)
   if (config.postDataUrl) {
-    const reported = await reportToBackstage(config, merged, context, agentResults);
+    const reported = await reportToBackstage(config, merged, context, agentResults, activity);
     core.setOutput('backstage_reported', reported);
   }
 
