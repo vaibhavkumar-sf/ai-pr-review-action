@@ -11,8 +11,14 @@ export const DEFAULT_MAX_TOKENS = 8192;
 // output). 1M targets GLM-5.2 / Opus 4.8; if a request still overflows (e.g. after
 // falling back to a smaller-window model), the compact auto-heal retry recovers it.
 export const DEFAULT_CONTEXT_WINDOW = 1000000;
-// Extended-thinking budget (tokens), added on top of max_tokens. High by default.
-export const DEFAULT_THINKING_BUDGET = 16384;
+// Extended-thinking budget (tokens), added on top of max_tokens. glm-5.2 streams
+// ALL thinking (~47 tok/s) before writing findings, so this knob directly sets how
+// long a review "hangs" before output: budget/47 ≈ seconds of thinking. 4096 ≈ ~90s,
+// enough reasoning for a structured review whose prompt already guides the model.
+// 16384 was ~350s (~7 min runs) — too slow for the marginal depth it bought.
+// NOTE: action.yml's thinking_budget input default shadows this for consumers that
+// don't set it — keep the two in sync.
+export const DEFAULT_THINKING_BUDGET = 4096;
 // Combined mode returns one large findings array; a higher floor avoids truncated JSON
 export const DEFAULT_COMBINED_MAX_TOKENS = 16384;
 export const DEFAULT_TEMPERATURE = 0.2;
@@ -21,11 +27,10 @@ export const DEFAULT_REVIEW_MODE: ReviewMode = 'combined';
 export const DEFAULT_FRAMEWORK: Framework = 'auto';
 export const DEFAULT_FAIL_THRESHOLD: FailThreshold = 'critical';
 export const DEFAULT_MAX_FILES = 50;
-// Per-agent API timeout (seconds). High by default because extended thinking is
-// on (thinking_budget=16384): finishing a full thinking budget on a large prompt
-// can take ~7-8 minutes end-to-end, so 300s was too short and truncated the call
-// before it could write findings. Thinking is capped by its budget, so this is
-// bounded across PR sizes; lower thinking_budget if you prefer faster reviews.
+// Per-agent API timeout (seconds). Generous headroom: with thinking_budget=4096 a
+// review is ~2.5 min end-to-end, but glm-5.2 latency is variable, so 600s leaves
+// slack for a slow endpoint spell rather than truncating the call before findings.
+// Thinking is capped by its budget, so total time is bounded across PR sizes.
 export const DEFAULT_AGENT_TIMEOUT = 600;
 export const DEFAULT_MAX_RETRIES = 3;
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';

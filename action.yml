@@ -29,9 +29,11 @@ inputs:
     required: false
     default: '8192'
   thinking_budget:
-    description: 'Extended-thinking budget in tokens, added on top of max_tokens (high by default for deeper reasoning). Auto-disabled if the endpoint rejects the thinking param'
+    description: 'Extended-thinking budget in tokens, added on top of max_tokens. Sets how long the model reasons before writing findings (~budget/47 seconds on glm-5.2). Raise for deeper reasoning, lower for faster reviews. Auto-disabled if the endpoint rejects the thinking param'
     required: false
-    default: '16384'
+    # 4096 (~90s thinking, ~2.5 min run). Was 16384 (~350s, ~7 min) — too slow for the
+    # marginal depth on a structured review. Must match DEFAULT_THINKING_BUDGET in defaults.ts.
+    default: '4096'
   context_window:
     description: "Total context window of the target model, in tokens. The prompt is trimmed to fit within this minus reserved output, avoiding model_context_window_exceeded. Default 1000000 (GLM-5.2 / Opus 4.8); if a request still overflows after a fallback to a smaller model, the compact retry recovers it"
     required: false
