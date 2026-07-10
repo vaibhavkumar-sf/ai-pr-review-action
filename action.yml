@@ -23,7 +23,7 @@ inputs:
   anthropic_model:
     description: 'Model ID to use for reviews'
     required: false
-    default: 'claude-opus-4-6-20250610'
+    default: 'claude-opus-4-8'
   max_tokens:
     description: 'Maximum tokens per AI response'
     required: false

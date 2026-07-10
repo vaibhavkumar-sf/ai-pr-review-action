@@ -45,7 +45,7 @@ One JSON object per review run. All keys are snake_case.
   "review_mode": "combined",
   "review_profile": "standard",
   "framework": "loopback4",
-  "model_name": "claude-opus-4-6-20250610",
+  "model_name": "claude-opus-4-8",
   "ai_provider": "anthropic",
 
   "review_status": "completed",

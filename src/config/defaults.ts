@@ -1,7 +1,7 @@
 import { ActionConfig, ReviewProfile, ReviewMode, Framework, FailThreshold } from '../types';
 import { getEnabledAgents } from './profiles';
 
-export const DEFAULT_MODEL = 'claude-opus-4-6-20250610';
+export const DEFAULT_MODEL = 'claude-opus-4-8';
 export const DEFAULT_MAX_TOKENS = 8192;
 // Combined mode returns one large findings array; a higher floor avoids truncated JSON
 export const DEFAULT_COMBINED_MAX_TOKENS = 16384;
