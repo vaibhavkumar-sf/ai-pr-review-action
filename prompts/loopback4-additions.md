@@ -315,6 +315,13 @@ async createUser(data: CreateUserDto): Promise<User> {
 }
 ```
 
+Additional hard rules:
+
+- **`HttpErrors.InternalServerError` is FORBIDDEN in application code — Severity: HIGH.** It is reserved for framework-level failures. Application code must throw the specific class matching the failure mode: `BadRequest` (400), `Unauthorized` (401), `Forbidden` (403), `NotFound` (404), `Conflict` (409), `UnprocessableEntity` (422), `TooManyRequests` (429). If a failure is genuinely unexpected, let it bubble up un-caught so the framework's default 500 handler logs the stack — never swallow and re-throw as a hand-rolled 500.
+- **Catch-block re-throws must map to a specific status — Severity: HIGH.** A `catch (err)` block that re-throws `HttpErrors.InternalServerError` (or a plain `Error`) hides the real failure and collapses everything to 500.
+- **Catch blocks need type narrowing — Severity: MEDIUM.** In strict mode caught errors are `unknown`; accessing `error.message` directly is unsafe. Use `error instanceof Error ? error.message : String(error)`.
+- Never `throw 'string literal'` — Severity: HIGH.
+
 ### 7. @authorize() on Protected Endpoints — Severity: HIGH
 
 Every endpoint that modifies data or accesses sensitive information MUST have an `@authorize()` decorator with explicit role definitions. Create a SEPARATE finding for EACH unprotected endpoint.
@@ -448,6 +455,48 @@ async find(
 }
 ```
 
+### 12. Datasource Configuration — No Hardcoded Hosts — Severity: HIGH
+
+Datasource files (`*.datasource.ts`, `*.datasource.config.json`, `*.datasource.json`, anything under `src/datasources/` or `datasources/`) MUST NOT contain `localhost`, `127.0.0.1`, or `0.0.0.0` in any `baseURL`, `host`, `url`, or connection-string field. A committed localhost URL ships to staging/production and either silently fails or accidentally talks to the host machine.
+
+**Bad:**
+```json
+{
+  "name": "sfdcIntegrationFacade",
+  "connector": "rest",
+  "baseURL": "http://localhost:4051"
+}
+```
+
+**Good:**
+```typescript
+const config = {
+  name: 'sfdcIntegrationFacade',
+  connector: 'rest',
+  baseURL: process.env.SFDC_INTEGRATION_FACADE_URL,
+};
+```
+
+Datasources must resolve their URL from environment variables with NO hardcoded localhost fallback. Also flag hardcoded credentials, ports without env-var indirection, and any literal IP address in committed datasource files. Create a finding for EVERY datasource file in the diff that violates this.
+
+### 13. No Wildcard Authorization Grants — Severity: HIGH
+
+`permissions: ['*']`, `allowedRoles: ['*']`, `scope: '*'`, `roles: ['*']`, or any equivalent wildcard authorization grant defeats RBAC entirely — every authenticated user gains the permission.
+
+**Bad:**
+```typescript
+@authorize({permissions: ['*']})       // HIGH
+@authorize({allowedRoles: ['*']})      // HIGH
+@authenticate.skip()                   // HIGH on protected endpoints
+// commented-out @authorize(...) on a state-changing endpoint — HIGH
+```
+
+Permissions MUST be enumerated from the project's permission enum/constant (e.g. `PermissionKey.ViewProject`, `PermissionKey.UpdateLead`), declaring the minimum required permission per endpoint. Also flag empty `allowedRoles: []` and commented-out `@authorize`/`@authenticate` decorators — they ship unauthenticated endpoints.
+
+### 14. No Runtime lb4 CLI Execution — Severity: HIGH
+
+The `lb4` CLI is a scaffolding tool — it must never be invoked at runtime from application code. Flag any production-path code that calls `lb4`, `npx lb4`, `child_process.exec('lb4 ...')`, or shells out to a code generator. Running generators at runtime is a security risk (arbitrary file writes) and a sign of bad architecture.
+
 ---
 
 ## Severity Summary
@@ -457,7 +506,13 @@ async find(
 | Missing @model() description | MEDIUM |
 | Missing @property() description | MEDIUM |
 | Plain Error instead of HttpErrors | HIGH |
+| Explicit HttpErrors.InternalServerError in app code | HIGH |
+| Catch re-throw collapsing to 500 | HIGH |
+| Catch block without type narrowing | MEDIUM |
 | Missing @authorize() | HIGH |
+| Wildcard permissions / allowedRoles ['*'] | HIGH |
+| Localhost/hardcoded host in datasource config | HIGH |
+| Runtime lb4 CLI execution | HIGH |
 | Unrestricted filters | HIGH |
 | Missing @param/@requestBody | MEDIUM |
 | Missing controller decorators | MEDIUM |
@@ -478,5 +533,8 @@ async find(
 6. Verify all endpoint parameters have `@param()` or `@requestBody()` decorators.
 7. Check filter usage for security restrictions.
 8. Verify model relationships are properly configured.
-9. Create ONE finding per violation with the exact line number and a concrete `code_suggestion`.
-10. Return valid JSON matching the parent agent's schema.
+9. Check every datasource file in the diff for localhost/hardcoded hosts.
+10. Check every `@authorize()` decorator for wildcard grants and every endpoint for commented-out auth decorators.
+11. Check for runtime `lb4`/generator execution in production paths.
+12. Create ONE finding per violation with the exact line number and a concrete `code_suggestion`.
+13. Return valid JSON matching the parent agent's schema.

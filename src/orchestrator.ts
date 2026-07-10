@@ -10,6 +10,8 @@ import { InlineReviewer } from './github/inline-reviewer';
 import { parseDiff } from './github/diff-parser';
 import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, generateArchitectureDiagram } from './results';
 import { generateDiagramImages, validateMermaid } from './results/image-diagram-generator';
+import { reportToBackstage } from './results/backstage-reporter';
+import { isTestFile } from './config/defaults';
 import { logger } from './utils/logger';
 
 /**
@@ -132,26 +134,36 @@ export async function runReview(config: ActionConfig): Promise<void> {
     }
   }
 
-  // 8. Deduplicate findings: programmatic pass first, then AI consolidation
+  // 8. Deduplicate findings: programmatic pass first, then AI consolidation.
+  // Combined mode has a single agent, so there are no cross-agent duplicates
+  // and the AI consolidation pass is skipped.
   const allFindings = agentResults.flatMap(r => r.findings);
   const deduplicated = deduplicateFindings(allFindings);
 
-  // AI consolidation pass — catches semantic duplicates that string matching misses
-  await commenter.postOrUpdateComment(
-    '## \uD83D\uDD0D AI Code Review\n\n\u2705 All agents complete. Consolidating findings...',
-  );
-  const consolidated = await consolidateFindings(
-    deduplicated,
-    provider,
-    config.agentTimeout * 1000,
-  );
+  let consolidated = deduplicated;
+  if (config.reviewMode !== 'combined') {
+    // AI consolidation pass — catches semantic duplicates that string matching misses
+    await commenter.postOrUpdateComment(
+      '## \uD83D\uDD0D AI Code Review\n\n\u2705 All agents complete. Consolidating findings...',
+    );
+    consolidated = await consolidateFindings(
+      deduplicated,
+      provider,
+      config.agentTimeout * 1000,
+    );
+  }
 
-  // Replace findings in agent results with consolidated versions
-  // (distribute consolidated findings back to their original agents)
-  const consolidatedResults = agentResults.map(r => ({
-    ...r,
-    findings: consolidated.filter(f => f.category === r.category),
-  }));
+  // Replace findings in agent results with consolidated versions.
+  // In separate mode, distribute consolidated findings back to their original
+  // agents by category. In combined mode the single comprehensive agent owns
+  // every finding (findings carry per-finding sub-categories, so a category
+  // filter would drop them all).
+  const consolidatedResults = config.reviewMode === 'combined'
+    ? agentResults.map(r => ({ ...r, findings: consolidated }))
+    : agentResults.map(r => ({
+        ...r,
+        findings: consolidated.filter(f => f.category === r.category),
+      }));
 
   const merged = mergeResults(consolidatedResults, config);
 
@@ -182,8 +194,11 @@ export async function runReview(config: ActionConfig): Promise<void> {
         const parsedDiffs = parseDiff(context.diff);
         const inlineReviewer = new InlineReviewer(octokit, config.owner, config.repo, config.prNumber);
 
+        // Inline comments never go on unit test files (findings remain in the
+        // summary comment) — mirrors the prompt-level suppression as a hard guard
         const inlineFindings = consolidated.filter(
-          f => f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium',
+          f => (f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium') &&
+            !isTestFile(f.file),
         );
 
         if (inlineFindings.length > 0) {
@@ -219,7 +234,13 @@ export async function runReview(config: ActionConfig): Promise<void> {
   core.setOutput('agents_run', agents.map(a => a.name).join(','));
   core.setOutput('agents_failed', agentResults.filter(r => r.error).map(r => r.agentName).join(','));
 
-  // 13. Fail the action if threshold is breached
+  // 13. Report review data to Backstage (fire-and-forget, never fails the action)
+  if (config.postDataUrl) {
+    const reported = await reportToBackstage(config, merged, context, agentResults);
+    core.setOutput('backstage_reported', reported);
+  }
+
+  // 14. Fail the action if threshold is breached
   if (config.failOnCritical && !merged.passed) {
     const failMsg =
       `Review failed: found ${merged.criticalCount} critical, ${merged.highCount} high, ` +
@@ -344,7 +365,8 @@ async function appendToPRDescription(
   if (merged.lowCount > 0) aiParts.push(`| \uD83D\uDFE2 Low | ${merged.lowCount} |`);
   if (merged.totalFindings === 0) aiParts.push('| \u2705 None | 0 |');
   aiParts.push('');
-  aiParts.push(`<sub>Last reviewed: ${new Date().toISOString()} | Model: ${config.anthropicModel} | Profile: ${config.reviewProfile}</sub>`);
+  const profileMeta = config.reviewMode === 'separate' ? ` | Profile: ${config.reviewProfile}` : '';
+  aiParts.push(`<sub>Last reviewed: ${new Date().toISOString()} | Model: ${config.anthropicModel} | Mode: ${config.reviewMode}${profileMeta}</sub>`);
 
   const newBody = userDescription + '\n' + aiParts.join('\n');
 

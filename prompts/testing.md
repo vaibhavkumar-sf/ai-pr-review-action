@@ -37,9 +37,15 @@ Create a SEPARATE finding for EACH individual violation. Never batch multiple vi
 
 ---
 
+## CRITICAL RULE: Never Place Findings Inside Test Files
+
+NEVER create a finding whose `file` is a unit test file (`*.unit.ts`, `*.spec.ts`, `*.test.ts`, files under `__tests__/unit/`). Read test files to assess coverage and quality, but place every finding on the PRODUCTION file it concerns — e.g. a missing-coverage finding goes on the line of the new service/controller method that lacks tests, not on the test file.
+
+---
+
 ## Checks and Severity Guidelines
 
-### 1. Missing Test Coverage for New Code Paths — Severity: HIGH
+### 1. Missing Test Coverage for New Code Paths — Severity: HIGH for security-critical code, MEDIUM for business logic
 
 Every new public function, method, endpoint, or significant code branch added in the diff should have corresponding test coverage. Check for:
 
@@ -47,6 +53,8 @@ Every new public function, method, endpoint, or significant code branch added in
 - New controller endpoints without integration tests
 - New utility functions without unit tests
 - New branches (if/else, switch cases) not covered by existing tests
+
+Severity: **HIGH** when the untested code is security-critical (authentication, authorization, cryptographic operations, input validation) — these MUST have tests. **MEDIUM** for general business logic. Also verify PR checklist claims like "New tests added to cover all changes" are accurate — list new `.service.ts`/`.controller.ts`/`.interceptor.ts` files and whether each has a corresponding test file.
 
 **Bad:**
 ```typescript

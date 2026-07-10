@@ -25,7 +25,12 @@ jobs:
           max_tokens: '8192'
           temperature: '0.2'
 
-          # ─── Review Profile ───────────────────────────────
+          # ─── Review Mode ──────────────────────────────────
+          # combined (default): one exhaustive all-at-once review
+          # separate: 7 parallel specialist agents (profile/toggles apply)
+          review_mode: 'combined'
+
+          # ─── Review Profile (separate mode only) ──────────
           # strict: all 7 agents | standard: 5 agents | minimal: 2 agents
           review_profile: 'strict'
 
@@ -54,6 +59,8 @@ jobs:
           fail_on_critical: 'false'
           fail_threshold: 'critical'
           post_inline_comments: 'true'
+          # Backstage tracker endpoint (optional) — see docs/backstage-integration.md
+          post_data_url: ${{ secrets.AI_REVIEW_POST_DATA_URL }}
           max_files_to_review: '50'
           exclude_patterns: '**/package-lock.json,**/yarn.lock,**/*.bpmn,**/openapi.json,**/dist/**'
 

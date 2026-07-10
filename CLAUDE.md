@@ -2,7 +2,11 @@
 
 ## What This Project Is
 
-A Docker-based GitHub Action that performs AI-powered code reviews on pull requests. It launches 7 parallel specialist agents (security, code-quality, performance, type-safety, architecture, testing, api-design), consolidates findings, and posts structured PR comments with inline code annotations.
+A Docker-based GitHub Action that performs AI-powered code reviews on pull requests. Two modes (`review_mode` input):
+- **combined (default)**: one ComprehensiveAgent covers every dimension in a single exhaustive pass (`prompts/comprehensive.md`); each finding keeps its own per-finding category.
+- **separate**: 7 parallel specialist agents (security, code-quality, performance, type-safety, architecture, testing, api-design) selected by profile/toggles, with an AI consolidation pass afterwards.
+
+Findings are posted as structured PR comments with inline code annotations, and optionally POSTed (aggregates + every finding) to a Backstage tracker via `post_data_url` (`src/results/backstage-reporter.ts`, contract in `docs/backstage-integration.md`).
 
 **Owner:** SourceFuse (currently at `vaibhavkumar-sf/ai-pr-review-action`, migrating to `sourcefuse/ai-pr-review-action`)
 
@@ -65,21 +69,25 @@ src/
     provider-factory.ts  ← createAIProvider(config)
   results/
     deduplicator.ts     ← Programmatic dedup (Levenshtein + Jaccard)
-    consolidation-agent.ts ← AI-powered semantic dedup (final pass)
+    consolidation-agent.ts ← AI-powered semantic dedup (final pass, separate mode only)
     merger.ts           ← Count by severity, determine pass/fail
-    formatter.ts        ← Format findings → markdown PR comment
+    formatter.ts        ← Format findings → markdown PR comment (severity + category tables)
     diagram-generator.ts ← Generate Mermaid from file imports
+    backstage-reporter.ts ← POST review metrics + all findings to post_data_url
 prompts/
+  comprehensive.md      ← Combined-mode all-at-once prompt (every dimension, per-finding category)
   security.md           ← OWASP, injections, auth, workflow security
-  code-quality.md       ← SOLID, DRY, KISS, complexity, error typing
+  code-quality.md       ← SOLID, DRY, KISS, complexity, error typing, inline types
   performance.md        ← N+1, memory leaks, async, pagination
-  type-safety.md        ← Return types, param types, JSDoc per function
+  type-safety.md        ← Return types, param types, unsafe casts (JSDoc checks disabled)
   architecture.md       ← Layering, DI, circular deps
-  testing.md            ← Coverage, edge cases, mocking
+  testing.md            ← Coverage, edge cases, mocking (never comments on test files)
   api-design.md         ← REST conventions, status codes, validation
   angular-additions.md  ← OnPush, RxJS, Signals, lazy loading
-  loopback4-additions.md ← @model descriptions, HttpErrors, @authorize
+  loopback4-additions.md ← @model descriptions, HttpErrors, @authorize, datasources, wildcards
 ```
+
+Agents also live in `src/agents/comprehensive.agent.ts` (combined mode): it overrides `resolveCategory()` to keep per-finding categories and `getMaxTokens()` to floor at 16384 (a truncated JSON response would lose all findings).
 
 ## Key Design Decisions
 
@@ -94,13 +102,13 @@ prompts/
 ### Review Flow (orchestrator.ts)
 1. Post initial progress comment
 2. Gather context (PR + JIRA + repo) in parallel
-3. Create AI provider + filter agents by profile
+3. Create AI provider + agents (combined mode: single ComprehensiveAgent; separate mode: filter by profile)
 4. Launch all agents in parallel (`Promise.allSettled`)
-5. Programmatic dedup → AI consolidation pass → merge
+5. Programmatic dedup → AI consolidation pass (separate mode only — skipped in combined mode) → merge
 6. Post final summary comment (replaces progress)
-7. Resolve stale inline threads → post new inline comments
+7. Resolve stale inline threads → post new inline comments (critical/high/medium, never on test files)
 8. Append AI description with Mermaid diagram to PR body
-9. Set action outputs, optionally fail
+9. Set action outputs → report to Backstage if `post_data_url` set → optionally fail
 
 ### Comments Strategy
 - **Summary comment:** One fixed comment per run, old ones minimized (not deleted) via GraphQL `minimizeComment(classifier: OUTDATED)`
@@ -137,9 +145,10 @@ Any Anthropic-compatible API works. Set `anthropic_base_url` to OpenRouter, GLM,
 4. Add agent label in `src/github/pr-commenter.ts` AGENT_LABELS
 5. Create `prompts/my-agent.md` with review rules + JSON response format
 6. Register in `src/agents/index.ts` createAgents()
-7. Add to profiles in `src/config/profiles.ts`
+7. Add to profiles in `src/config/profiles.ts` (profiles use `SpecialistCategory` — `comprehensive` is excluded and selected only via `review_mode: combined`)
 8. Add `enable_my_agent_review` input in `action.yml`
 9. Add toggle mapping in `src/config/action-inputs.ts`
+10. Add the category to `prompts/comprehensive.md` so combined mode covers it too
 
 ### Adding a New AI Provider
 1. Create `src/providers/my-provider.ts` implementing `AIProvider`

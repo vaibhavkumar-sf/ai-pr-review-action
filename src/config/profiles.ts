@@ -1,6 +1,9 @@
 import { ReviewCategory, ReviewProfile } from '../types';
 
-export type ProfileMap = Record<ReviewCategory, boolean>;
+// Profiles only select specialist agents; 'comprehensive' is chosen by
+// review_mode: combined and never appears in a profile.
+export type SpecialistCategory = Exclude<ReviewCategory, 'comprehensive'>;
+export type ProfileMap = Record<SpecialistCategory, boolean>;
 
 const strict: ProfileMap = {
   'security': true,
@@ -44,7 +47,7 @@ export function getEnabledAgents(profile: ReviewProfile, overrides?: Partial<Pro
   if (overrides) {
     for (const [key, value] of Object.entries(overrides)) {
       if (value !== undefined) {
-        base[key as ReviewCategory] = value;
+        base[key as SpecialistCategory] = value;
       }
     }
   }

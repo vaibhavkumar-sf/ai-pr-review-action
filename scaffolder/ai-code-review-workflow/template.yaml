@@ -1,0 +1,138 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: add-ai-code-review-workflow
+  title: AI Code Review
+  description: Creates a PR to add the AI PR Review GitHub Actions workflow to an existing repository
+  tags:
+    - github
+    - ci
+    - quality
+    - code-review
+spec:
+  owner: group:sourcefuse
+  type: service
+
+  parameters:
+    - title: Target Repository
+      required:
+        - repoUrl
+      properties:
+        repoUrl:
+          title: Repository
+          type: string
+          description: The existing repository to add the workflow to
+          ui:field: RepoUrlPicker
+          ui:options:
+            allowedHosts:
+              - github.com
+            allowedOwners:
+              - sourcefuse
+
+    - title: Workflow Configuration
+      required:
+        - triggerBranches
+        - jiraProjectKey
+        - reviewMode
+      properties:
+        triggerBranches:
+          title: Trigger Branches
+          type: string
+          description: Comma-separated list of branches that trigger the review on PR (e.g. dev, main, staging)
+          default: dev
+        jiraProjectKey:
+          title: JIRA Project Key
+          type: string
+          description: JIRA project key prefix used in ticket IDs (e.g. TEL, BB, PROJ)
+          default: TEL
+        reviewMode:
+          title: Review Mode
+          type: string
+          description: combined = one exhaustive all-at-once review (default). separate = 7 parallel specialist agents selected by the review profile
+          default: combined
+          enum:
+            - combined
+            - separate
+        reviewProfile:
+          title: Review Profile (separate mode only)
+          type: string
+          description: Review intensity when reviewMode is separate. Ignored in combined mode
+          default: standard
+          enum:
+            - strict
+            - standard
+            - minimal
+
+    - title: Pull Request Details
+      required:
+        - branchName
+      properties:
+        branchName:
+          title: Branch Name
+          type: string
+          description: Branch name for the PR
+          default: feat/add-ai-code-review-workflow
+        prTitle:
+          title: PR Title
+          type: string
+          description: Title for the pull request
+          default: 'ci: add AI code review workflow'
+        prDescription:
+          title: PR Description
+          type: string
+          description: Description for the pull request
+          default: |
+            Adds the AI Code Review GitHub Actions workflow.
+
+            This workflow automatically reviews pull requests using AI by:
+            - Running an exhaustive multi-dimension code review (security, code quality, performance, type safety, architecture, testing, API design)
+            - Posting a summary comment with severity and category breakdowns
+            - Posting inline review comments on specific diff lines
+            - Appending Mermaid architecture diagrams to the PR description
+            - Reporting metrics and individual findings to the Backstage tracker
+
+            **Required Secrets:** ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL
+            **Optional Secrets:** JIRA_URL, JIRA_EMAIL, JIRA_TOKEN (JIRA context), AI_REVIEW_POST_DATA_URL (Backstage reporting)
+
+            GITHUB_TOKEN is provided automatically by GitHub Actions.
+          ui:widget: textarea
+
+  steps:
+    - id: fetch-workflow
+      name: Fetch Workflow from GitHub
+      action: fetch:plain:file
+      input:
+        # NOTE: re-point this URL to @main (or a release tag) once the branch is merged
+        url: https://github.com/vaibhavkumar-sf/ai-pr-review-action/blob/feat/review2-combined-mode-backstage/templates/ai-code-review.yml
+        targetPath: .github/workflows/ai-code-review.yml
+
+    - id: replace-variables
+      name: Configure Workflow Variables
+      action: acme:file:replace
+      input:
+        filePath: .github/workflows/ai-code-review.yml
+        replacements:
+          - search: "      - dev"
+            replace: ${{ parameters.triggerBranches }}
+            type: yaml-list
+            indent: 6
+          - search: "'TEL'"
+            replace: "'${{ parameters.jiraProjectKey }}'"
+          - search: "'combined'"
+            replace: "'${{ parameters.reviewMode }}'"
+          - search: "'standard'"
+            replace: "'${{ parameters.reviewProfile }}'"
+
+    - id: create-pr
+      name: Create Pull Request
+      action: publish:github:pull-request
+      input:
+        repoUrl: ${{ parameters.repoUrl }}
+        branchName: ${{ parameters.branchName }}
+        title: ${{ parameters.prTitle }}
+        description: ${{ parameters.prDescription }}
+
+  output:
+    links:
+      - title: Pull Request
+        url: ${{ steps['create-pr'].output.remoteUrl }}

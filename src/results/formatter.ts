@@ -1,4 +1,4 @@
-import { ActionConfig, AgentResult, Finding, MergedReviewResult, ReviewContext, Severity } from '../types';
+import { ActionConfig, AgentResult, Finding, MergedReviewResult, ReviewCategory, ReviewContext, Severity } from '../types';
 import { generateArchitectureDiagram } from './diagram-generator';
 
 const SEVERITY_ICONS: Record<Severity, string> = {
@@ -15,6 +15,17 @@ const SEVERITY_LABELS: Record<Severity, string> = {
   medium: 'Medium',
   low: 'Low',
   nit: 'Nit',
+};
+
+const CATEGORY_LABELS: Record<ReviewCategory, string> = {
+  'security': '🔒 Security',
+  'code-quality': '📝 Code Quality',
+  'performance': '⚡ Performance',
+  'type-safety': '🔍 Type Safety',
+  'architecture': '🏗️ Architecture',
+  'testing': '🧪 Testing',
+  'api-design': '🔌 API Design',
+  'comprehensive': '🔎 Comprehensive',
 };
 
 /**
@@ -36,7 +47,8 @@ export function formatReviewComment(
   parts.push('');
 
   // Meta information
-  parts.push(`> **Model:** \`${config.anthropicModel}\` | **Profile:** \`${config.reviewProfile}\` | **Duration:** ${formatDuration(result.durationMs)}`);
+  const profileMeta = config.reviewMode === 'separate' ? ` | **Profile:** \`${config.reviewProfile}\`` : '';
+  parts.push(`> **Model:** \`${config.anthropicModel}\` | **Mode:** \`${config.reviewMode}\`${profileMeta} | **Duration:** ${formatDuration(result.durationMs)}`);
   parts.push('');
 
   // Severity summary table
@@ -51,6 +63,19 @@ export function formatReviewComment(
   parts.push(`| ${SEVERITY_ICONS.nit} Nit | ${result.nitCount} |`);
   parts.push(`| **Total** | **${result.totalFindings}** |`);
   parts.push('');
+
+  // Category breakdown table — findings carry per-finding categories in both modes
+  const categoryCounts = countByCategory(result.findings);
+  if (categoryCounts.length > 0) {
+    parts.push('### Findings by Category');
+    parts.push('');
+    parts.push('| Category | Count |');
+    parts.push('|----------|-------|');
+    for (const [category, count] of categoryCounts) {
+      parts.push(`| ${CATEGORY_LABELS[category]} | ${count} |`);
+    }
+    parts.push('');
+  }
 
   // Pass/fail status
   if (result.passed) {
@@ -194,6 +219,14 @@ export function formatReviewComment(
   parts.push('');
 
   return parts.join('\n');
+}
+
+function countByCategory(findings: Finding[]): Array<[ReviewCategory, number]> {
+  const counts = new Map<ReviewCategory, number>();
+  for (const f of findings) {
+    counts.set(f.category, (counts.get(f.category) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
 function formatDuration(ms: number): string {

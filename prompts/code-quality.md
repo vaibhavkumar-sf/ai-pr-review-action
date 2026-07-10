@@ -35,6 +35,8 @@ The `score` field is a code quality score from 0 (severe issues) to 10 (exemplar
 
 Create a SEPARATE finding for EACH individual violation. Never batch multiple violations into one finding. If a file has 5 functions with high complexity, create 5 separate findings — one for each function with its exact line number. If 3 functions have too many parameters, that is 3 separate findings.
 
+Be exhaustive: walk every check below for every changed file. Do not skim or stop early. When in doubt about a borderline issue, flag it with severity `low` or `nit` rather than dropping it — a finding the author dismisses is cheaper than a missed problem.
+
 ---
 
 ## Checks and Severity Guidelines
@@ -174,9 +176,9 @@ class OrderService {
 
 ### 2. Clean Code Principles
 
-#### DRY Violations (Don't Repeat Yourself) — Severity: MEDIUM
+#### DRY Violations (Don't Repeat Yourself) — Severity: MEDIUM (HIGH if security-critical)
 
-Flag duplicated logic blocks (3+ lines of substantially similar code appearing 2+ times). Suggest extracting to a shared function or utility.
+Flag duplicated logic blocks appearing 3+ times (even with minor variations) as **MEDIUM**. If the duplication is in security-critical code (HMAC signing, token handling, input validation), flag as **HIGH** — divergence between copies creates vulnerabilities. Also flag the same model, interface, type, enum, or utility defined in multiple packages/services — shared contracts belong in a shared package. Suggest concrete extraction targets: shared utility, base class, or shared package.
 
 #### KISS Violations (Keep It Simple, Stupid) — Severity: LOW
 
@@ -312,6 +314,17 @@ async function uploadFile(file: Buffer): Promise<FileUploadResult> {
 ```
 
 For each violation, provide a concrete `code_suggestion` with the extracted interface name and definition.
+
+#### Inline Interfaces, Anonymous Types & String-Literal Unions — Severity: MEDIUM (HIGH for public API contracts)
+
+No inline interfaces, schemas, anonymous object types, or string-literal unions anywhere. Every interface, DTO, type, and enum must live in its own dedicated file under the appropriate folder (`models/`, `interfaces/`, `dtos/`, `types/`, `enums/`):
+
+- `interface Foo {...}` or `type Foo = {...}` declared inside a `.service.ts`/`.controller.ts`/`.repository.ts` above a class → move to `interfaces/foo.interface.ts` (or `dtos/foo.dto.ts` for request/response payloads)
+- Anonymous "options bag" parameter types: `async sync(opts: {force: boolean; tenantId: string})` → extract to `interfaces/sync-options.interface.ts`
+- String-literal unions used as discriminators or status values: `type Status = 'open' | 'closed' | 'archived'` → MUST be an enum in `enums/status.enum.ts`
+- Magic strings used at call sites where an enum already exists → use the enum member
+
+Severity: **HIGH** when the type is a public API contract (controller request/response, service-proxy interface, shared package contract); **MEDIUM** for internal helpers. Always name the new file path in the suggestion.
 
 ---
 

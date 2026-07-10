@@ -18,6 +18,7 @@ const AGENT_LABELS: Record<ReviewCategory, string> = {
   'architecture': '\uD83C\uDFD7\uFE0F Architecture',
   'testing': '\uD83E\uDDEA Testing',
   'api-design': '\uD83D\uDD0C API Design',
+  'comprehensive': '\uD83D\uDD0E Comprehensive Review',
 };
 
 export class PRCommenter {

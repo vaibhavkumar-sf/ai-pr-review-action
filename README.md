@@ -1,6 +1,6 @@
 # AI PR Review Action
 
-Comprehensive, AI-powered code review for TypeScript / Angular / LoopBack4 projects. Launches parallel specialist agents — each focused on a specific quality dimension — and posts structured findings as inline PR comments with a unified summary.
+Comprehensive, AI-powered code review for TypeScript / Angular / LoopBack4 projects. Reviews every quality dimension — either in one exhaustive all-at-once pass (default) or with parallel specialist agents — and posts structured findings as inline PR comments with a unified summary. Every finding carries a category (security, performance, …) and a severity (critical … nit), and can be reported to a Backstage tracker for database storage.
 
 ## Quick Start
 
@@ -27,21 +27,39 @@ jobs:
 
 That's it. Three lines of config for a full review.
 
+## Review Modes
+
+| Mode | How it works |
+|------|--------------|
+| `combined` (default) | ONE comprehensive agent reviews everything at once in a single exhaustive pass — modeled on an expert reviewer walking a full checklist per file. Each finding is still tagged with its own category and severity. `review_profile` and the `enable_*_review` toggles are ignored. |
+| `separate` | 7 parallel specialist agents (selected by `review_profile` / toggles) each review their own dimension; findings are deduplicated and AI-consolidated afterwards. |
+
+```yaml
+review_mode: 'combined'   # or 'separate'
+```
+
+Both modes produce the same output shape: categorized, severity-ranked findings in the summary comment, inline comments for critical/high/medium findings, Mermaid diagrams in the PR description, and (optionally) a Backstage report.
+
+Notes on review behavior (both modes):
+- Missing JSDoc/TSDoc is never flagged (missing types still are).
+- Inline comments are never posted on unit test files (`*.spec.ts`, `*.unit.ts`, `*.test.ts`); missing-coverage findings are placed on the production file.
+- Inline comments are posted for critical/high/medium findings only; low/nit findings appear in the summary comment and the Backstage payload.
+
 ## What It Reviews
 
-Seven parallel specialist agents, each with deep domain expertise:
+Seven review dimensions, each with deep domain expertise (as one combined pass or parallel specialist agents):
 
-| Agent | What It Checks |
+| Category | What It Checks |
 |-------|---------------|
-| Security | OWASP Top 10, injection, secrets, auth, CORS, prototype pollution |
-| Code Quality | SOLID, DRY, KISS, complexity, naming, error typing, logging context |
+| Security | OWASP Top 10, injection, secrets, auth, wildcard permissions, localhost datasources, CORS |
+| Code Quality | SOLID, DRY, KISS, complexity, naming, error typing (HttpErrors), logging context |
 | Performance | N+1 queries, memory leaks, async patterns, pagination, caching |
-| Type Safety & Docs | Missing types, JSDoc, inline return types, parameter counts |
+| Type Safety | Missing types, unsafe casts, inline return types, inline schemas/enums, parameter counts |
 | Architecture | Layering, DI, circular deps, Angular/LB4 patterns |
 | Testing | Coverage gaps, edge cases, mock quality, test isolation |
 | API Design | REST conventions, status codes, validation, pagination, versioning |
 
-## Review Profiles
+## Review Profiles (separate mode only)
 
 | Profile | Agents | Use Case |
 |---------|--------|----------|
@@ -107,6 +125,20 @@ fail_on_critical: 'true'        # Fail PR on critical findings
 fail_threshold: 'high'          # Fail on high or critical findings
 ```
 
+## Backstage Reporting (Optional)
+
+Set `post_data_url` to POST the full review result — aggregate metrics plus every individual finding with its category and severity — to a Backstage tracker endpoint after each run:
+
+```yaml
+post_data_url: ${{ secrets.AI_REVIEW_POST_DATA_URL }}
+```
+
+The request is fire-and-forget (10s timeout, never fails the action). See [`docs/backstage-integration.md`](docs/backstage-integration.md) for the payload contract and the suggested database schema (`ai_code_reviews` + `ai_review_findings` tables).
+
+## Backstage Scaffolder Template
+
+[`scaffolder/ai-code-review-workflow/template.yaml`](scaffolder/ai-code-review-workflow/template.yaml) is a Backstage Software Template that opens a PR adding this workflow ([`templates/ai-code-review.yml`](templates/ai-code-review.yml)) to any repository — same mechanism as `sourcefuse/ai-test-quality-analyzer`'s templates (`fetch:plain:file` → `acme:file:replace` → `publish:github:pull-request`). Parameters: target repo, trigger branches, JIRA project key, review mode, review profile.
+
 ## All Inputs
 
 See [`action.yml`](action.yml) for the complete list of inputs with descriptions and defaults.
@@ -114,6 +146,7 @@ See [`action.yml`](action.yml) for the complete list of inputs with descriptions
 ## Examples
 
 - [`basic-usage.yml`](examples/basic-usage.yml) — Minimal setup
+- [`combined-mode.yml`](examples/combined-mode.yml) — All-at-once review + Backstage reporting
 - [`full-config.yml`](examples/full-config.yml) — All options
 - [`angular-project.yml`](examples/angular-project.yml) — Angular-specific
 - [`loopback4-project.yml`](examples/loopback4-project.yml) — LoopBack4-specific
