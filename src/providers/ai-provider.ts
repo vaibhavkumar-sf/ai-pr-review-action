@@ -21,4 +21,6 @@ export interface AIProvider {
   chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatResponse>;
   /** Logs the model + endpoint in use and best-effort lists available models. Never throws. */
   logDiagnostics(): Promise<void>;
+  /** The model actually used after fallback resolution (for reporting). */
+  getResolvedModel(): string;
 }

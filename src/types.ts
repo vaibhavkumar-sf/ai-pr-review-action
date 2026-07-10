@@ -80,8 +80,12 @@ export interface ActionConfig {
   // Provider
   anthropicAuthToken: string;
   anthropicBaseUrl: string;
+  // Model id, or a comma-separated fallback chain tried in order (the next is
+  // used only when a model is rejected as unknown/unsupported by the endpoint).
   anthropicModel: string;
   maxTokens: number;
+  // Extended-thinking budget in tokens, added on top of maxTokens. High by default.
+  thinkingBudget: number;
   // Total context window of the target model, in tokens. The assembled prompt is
   // trimmed to fit within (contextWindow - reserved output) so requests are not
   // rejected with model_context_window_exceeded. Default 200000 (the GLM tier the
