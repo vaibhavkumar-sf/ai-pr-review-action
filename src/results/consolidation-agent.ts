@@ -1,5 +1,6 @@
 import { AIProvider } from '../providers/ai-provider';
 import { Finding } from '../types';
+import { extractJsonObject } from '../utils/json';
 import * as core from '@actions/core';
 
 const CONSOLIDATION_SYSTEM_PROMPT = `You are a code review consolidation agent. Your job is to take a list of findings from multiple specialist review agents and consolidate them into a clean, non-redundant list.
@@ -120,17 +121,12 @@ function buildUserPrompt(findings: Finding[]): string {
 
 function parseResponse(content: string, originalFindings: Finding[]): Finding[] {
   try {
-    // Extract JSON from response (may be wrapped in markdown code blocks)
-    const jsonMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/) || [null, content];
-    const jsonStr = jsonMatch[1] || content;
-
-    const startIdx = jsonStr.indexOf('{');
-    const endIdx = jsonStr.lastIndexOf('}');
-    if (startIdx === -1 || endIdx === -1) {
+    const jsonStr = extractJsonObject(content);
+    if (!jsonStr) {
       throw new Error('No JSON object found in consolidation response');
     }
 
-    const parsed = JSON.parse(jsonStr.substring(startIdx, endIdx + 1));
+    const parsed = JSON.parse(jsonStr);
     const consolidated = parsed.consolidated;
 
     if (!Array.isArray(consolidated) || consolidated.length === 0) {

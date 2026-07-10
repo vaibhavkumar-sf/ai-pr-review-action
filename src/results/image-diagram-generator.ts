@@ -1,5 +1,6 @@
 import { AIProvider } from '../providers/ai-provider';
 import { ReviewContext, MergedReviewResult } from '../types';
+import { extractJsonObject } from '../utils/json';
 import * as core from '@actions/core';
 
 /**
@@ -446,16 +447,12 @@ export async function validateMermaidViaKroki(mermaidCode: string): Promise<stri
 
 function parseDiagramResponse(content: string): MermaidDiagrams {
   try {
-    const jsonMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/) || [null, content];
-    const jsonStr = jsonMatch[1] || content;
-
-    const startIdx = jsonStr.indexOf('{');
-    const endIdx = jsonStr.lastIndexOf('}');
-    if (startIdx === -1 || endIdx === -1) {
+    const jsonStr = extractJsonObject(content);
+    if (!jsonStr) {
       throw new Error('No JSON object found');
     }
 
-    const parsed = JSON.parse(jsonStr.substring(startIdx, endIdx + 1));
+    const parsed = JSON.parse(jsonStr);
 
     return {
       flowchart: typeof parsed.flowchart === 'string' ? parsed.flowchart : null,

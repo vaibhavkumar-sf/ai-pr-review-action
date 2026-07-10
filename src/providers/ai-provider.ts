@@ -13,6 +13,8 @@ export interface ChatResponse {
   content: string;
   inputTokens: number;
   outputTokens: number;
+  /** Anthropic stop_reason (`end_turn`, `max_tokens`, …) — used for diagnostics. */
+  stopReason?: string | null;
 }
 
 export interface AIProvider {
