@@ -6,6 +6,7 @@ export class AnthropicProvider implements AIProvider {
   private client: Anthropic;
   private model: string;
   private maxRetries: number;
+  private baseUrl: string;
 
   constructor(baseUrl: string, apiKey: string, model: string, maxRetries: number) {
     this.client = new Anthropic({
@@ -14,6 +15,46 @@ export class AnthropicProvider implements AIProvider {
     });
     this.model = model;
     this.maxRetries = maxRetries;
+    this.baseUrl = baseUrl;
+  }
+
+  /**
+   * Logs which model and endpoint are actually in use, and best-effort lists the
+   * models the endpoint advertises. Fault-tolerant: never throws. Helpful when a
+   * request fails with "Unknown Model" — the list reveals the exact accepted ids
+   * (e.g. a z.ai/GLM endpoint lists glm-* ids and only maps Claude-tier names).
+   */
+  async logDiagnostics(): Promise<void> {
+    core.info(`AI model requested: ${this.model}`);
+    let host = this.baseUrl;
+    try {
+      host = new URL(this.baseUrl).host;
+    } catch {
+      // keep the raw value if it is not a parseable URL
+    }
+    core.info(`AI endpoint: ${host}`);
+
+    try {
+      // Anthropic-compatible endpoints expose GET /v1/models.
+      const models = await this.client.models.list();
+      const ids = models.data.map((m) => m.id);
+      core.info(
+        ids.length
+          ? `Endpoint advertises ${ids.length} model(s): ${ids.join(', ')}`
+          : 'Endpoint returned an empty model list',
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      core.info(`Model list unavailable from this endpoint (non-critical): ${msg}`);
+    }
+
+    // Reproduce locally to probe the endpoint. Supply the key from YOUR shell —
+    // it is a secret and is intentionally NOT printed here (GitHub masks it anyway).
+    const modelsUrl = `${this.baseUrl.replace(/\/+$/, '')}/v1/models`;
+    core.info(
+      'Debug locally (export your key first, e.g. `export ANTHROPIC_AUTH_TOKEN=...`):\n'
+      + `  curl -sS '${modelsUrl}' -H "x-api-key: $ANTHROPIC_AUTH_TOKEN" -H "anthropic-version: 2023-06-01"`,
+    );
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatResponse> {

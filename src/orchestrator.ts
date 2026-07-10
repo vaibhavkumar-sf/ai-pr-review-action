@@ -83,6 +83,7 @@ export async function runReview(config: ActionConfig): Promise<void> {
 
   // 5. Create AI provider and agents
   const provider = createAIProvider(config);
+  await provider.logDiagnostics();
   const agents = createAgents(provider, config);
 
   if (agents.length === 0) {
