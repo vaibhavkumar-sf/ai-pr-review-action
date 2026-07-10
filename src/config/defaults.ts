@@ -1,12 +1,15 @@
 import { ActionConfig, ReviewProfile, ReviewMode, Framework, FailThreshold } from '../types';
 import { getEnabledAgents } from './profiles';
 
-export const DEFAULT_MODEL = 'claude-opus-4-8';
+// Org default: latest GLM flagship on the z.ai Anthropic-compatible endpoint
+// (1M context). Override anthropic_model when pointing at a different provider
+// (e.g. 'claude-opus-4-8' for real Anthropic, 'glm-4.6' for the 200K tier).
+export const DEFAULT_MODEL = 'glm-5.2[1m]';
 export const DEFAULT_MAX_TOKENS = 8192;
-// Conservative total context window (tokens). GLM-4.6 and most Anthropic-compatible
-// proxies are ~200K; the assembled prompt is trimmed to fit within this minus the
-// reserved output. Raise to 1000000 when pointing at real Claude Opus 4.8.
-export const DEFAULT_CONTEXT_WINDOW = 200000;
+// Total context window (tokens) of the default model. GLM-5.2 (and real Claude
+// Opus 4.8) provide 1M; the assembled prompt is trimmed to fit within this minus
+// the reserved output. Lower to 200000 for a 200K-tier model such as GLM-4.6.
+export const DEFAULT_CONTEXT_WINDOW = 1000000;
 // Combined mode returns one large findings array; a higher floor avoids truncated JSON
 export const DEFAULT_COMBINED_MAX_TOKENS = 16384;
 export const DEFAULT_TEMPERATURE = 0.2;

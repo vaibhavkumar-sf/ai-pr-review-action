@@ -22,7 +22,7 @@ Findings are posted as structured PR comments with inline code annotations, and 
 | Action inputs | `action.yml` |
 | Architecture docs | `docs/architecture.md` |
 | Examples | `examples/*.yml` |
-| Default model | `claude-opus-4-8` (Opus 4.8, 1M context) |
+| Default model | `glm-5.2[1m]` (GLM-5.2, 1M context, via z.ai endpoint) — override for other providers |
 
 ## Build & Run
 
