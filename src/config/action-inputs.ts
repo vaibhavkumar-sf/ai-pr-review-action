@@ -118,6 +118,7 @@ export function parseActionInputs(): ActionConfig {
     anthropicBaseUrl: getInputOrDefault('anthropic_base_url', defaults.anthropicBaseUrl),
     anthropicModel: getInputOrDefault('anthropic_model', defaults.anthropicModel),
     maxTokens: getNumberInput('max_tokens', defaults.maxTokens),
+    thinkingBudget: getNumberInput('thinking_budget', defaults.thinkingBudget),
     contextWindow: getNumberInput('context_window', defaults.contextWindow),
     temperature: parseFloat(getInputOrDefault('temperature', String(defaults.temperature))),
 

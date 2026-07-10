@@ -120,6 +120,10 @@ export async function runReview(config: ActionConfig): Promise<void> {
 
   const settled = await Promise.allSettled(agentPromises);
 
+  // Report the model actually used (after any fallback resolution) rather than the
+  // raw candidate chain, so PR comments and Backstage record the real model.
+  config.anthropicModel = provider.getResolvedModel();
+
   // 7. Collect results from settled promises
   const agentResults: AgentResult[] = [];
   for (let i = 0; i < settled.length; i++) {

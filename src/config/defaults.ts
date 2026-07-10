@@ -1,17 +1,18 @@
 import { ActionConfig, ReviewProfile, ReviewMode, Framework, FailThreshold } from '../types';
 import { getEnabledAgents } from './profiles';
 
-// Default model. The org's ANTHROPIC_BASE_URL is a z.ai (GLM) Anthropic-compatible
-// endpoint that accepts CLAUDE-tier model names and maps them internally to a GLM
-// model (~200K window) — raw GLM ids like 'glm-5.2[1m]' are rejected as "Unknown
-// Model". Keep a Claude-tier name here; override anthropic_model + context_window
-// for a different provider or a larger-context tier once its exact id is confirmed.
-export const DEFAULT_MODEL = 'claude-opus-4-8';
+// Default model as an ordered fallback chain (comma-separated): try the latest
+// GLM first, then its explicit 1M variant, then a Claude-tier name that the z.ai
+// endpoint maps to GLM. The provider advances to the next only when a model is
+// rejected as "Unknown Model", and latches the first that works.
+export const DEFAULT_MODEL = 'glm-5.2,glm-5.2[1m],claude-opus-4-8';
 export const DEFAULT_MAX_TOKENS = 8192;
 // Total context window (tokens) the prompt is trimmed to fit within (minus reserved
-// output). 200000 is safe for the GLM tier the default model maps to. Raise (e.g.
-// 1000000) only when the endpoint truly serves a 1M-context model.
-export const DEFAULT_CONTEXT_WINDOW = 200000;
+// output). 1M targets GLM-5.2 / Opus 4.8; if a request still overflows (e.g. after
+// falling back to a smaller-window model), the compact auto-heal retry recovers it.
+export const DEFAULT_CONTEXT_WINDOW = 1000000;
+// Extended-thinking budget (tokens), added on top of max_tokens. High by default.
+export const DEFAULT_THINKING_BUDGET = 16384;
 // Combined mode returns one large findings array; a higher floor avoids truncated JSON
 export const DEFAULT_COMBINED_MAX_TOKENS = 16384;
 export const DEFAULT_TEMPERATURE = 0.2;
@@ -73,6 +74,7 @@ export function buildDefaultConfig(): ActionConfig {
     anthropicBaseUrl: DEFAULT_ANTHROPIC_BASE_URL,
     anthropicModel: DEFAULT_MODEL,
     maxTokens: DEFAULT_MAX_TOKENS,
+    thinkingBudget: DEFAULT_THINKING_BUDGET,
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     temperature: DEFAULT_TEMPERATURE,
 

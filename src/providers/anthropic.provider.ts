@@ -4,18 +4,34 @@ import * as core from '@actions/core';
 
 export class AnthropicProvider implements AIProvider {
   private client: Anthropic;
-  private model: string;
+  // Ordered fallback chain: tried in order, advancing only on "unknown model"
+  // errors. Once one works it is latched into `resolvedModel` for all later calls.
+  private models: string[];
+  private resolvedModel?: string;
   private maxRetries: number;
   private baseUrl: string;
+  private thinkingBudget: number;
 
-  constructor(baseUrl: string, apiKey: string, model: string, maxRetries: number) {
+  constructor(
+    baseUrl: string,
+    apiKey: string,
+    models: string[],
+    maxRetries: number,
+    thinkingBudget: number,
+  ) {
     this.client = new Anthropic({
       baseURL: baseUrl,
       apiKey,
     });
-    this.model = model;
+    this.models = models.length ? models : ['claude-opus-4-8'];
     this.maxRetries = maxRetries;
     this.baseUrl = baseUrl;
+    this.thinkingBudget = thinkingBudget;
+  }
+
+  /** The model already confirmed to work, or the first candidate if none tried yet. */
+  getResolvedModel(): string {
+    return this.resolvedModel ?? this.models[0];
   }
 
   /**
@@ -25,7 +41,11 @@ export class AnthropicProvider implements AIProvider {
    * (e.g. a z.ai/GLM endpoint lists glm-* ids and only maps Claude-tier names).
    */
   async logDiagnostics(): Promise<void> {
-    core.info(`AI model requested: ${this.model}`);
+    core.info(
+      this.models.length > 1
+        ? `AI model fallback chain: ${this.models.join(' → ')}`
+        : `AI model requested: ${this.models[0]}`,
+    );
     let host = this.baseUrl;
     try {
       host = new URL(this.baseUrl).host;
@@ -58,6 +78,45 @@ export class AnthropicProvider implements AIProvider {
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatResponse> {
+    // Try each candidate model in order; advance only when a model is rejected as
+    // unknown/unsupported. Once resolved, later calls use just that model.
+    const candidates = this.resolvedModel ? [this.resolvedModel] : this.models;
+    let lastUnknownModelError: Error | undefined;
+
+    for (let mi = 0; mi < candidates.length; mi++) {
+      const model = candidates[mi];
+      try {
+        const result = await this.chatWithModel(model, messages, options);
+        if (!this.resolvedModel) {
+          this.resolvedModel = model;
+          core.info(`Using model: ${model}`);
+        }
+        return result;
+      } catch (error) {
+        if (this.isUnknownModelError(error)) {
+          lastUnknownModelError = error instanceof Error ? error : new Error(String(error));
+          const next = candidates[mi + 1];
+          core.warning(
+            `Model "${model}" was rejected as unknown/unsupported`
+            + (next ? `; falling back to "${next}"` : ' — no more fallbacks'),
+          );
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error(
+      `All candidate models were rejected as unknown (${candidates.join(', ')}): `
+      + `${lastUnknownModelError?.message ?? 'Unknown error'}`,
+    );
+  }
+
+  private async chatWithModel(
+    model: string,
+    messages: ChatMessage[],
+    options: ChatOptions,
+  ): Promise<ChatResponse> {
     const systemMessage = messages.find((m) => m.role === 'system');
     const conversationMessages = messages
       .filter((m) => m.role !== 'system')
@@ -66,10 +125,11 @@ export class AnthropicProvider implements AIProvider {
         content: m.content,
       }));
 
-    // Enable extended thinking for deeper reasoning
-    // When thinking is enabled, temperature must be 1 (Anthropic requirement)
-    const thinkingBudget = Math.min(options.maxTokens, 8192);
-    const useThinking = this.supportsThinking();
+    // Extended thinking for deeper reasoning. The budget is added on top of
+    // max_tokens (so it never starves the text output) and stays >= the 1024
+    // floor the API requires. When thinking is on, temperature must be 1.
+    const thinkingBudget = Math.max(this.thinkingBudget, 1024);
+    const useThinking = this.supportsThinking(model);
 
     let lastError: Error | undefined;
 
@@ -80,7 +140,7 @@ export class AnthropicProvider implements AIProvider {
 
         try {
           const requestParams: Record<string, unknown> = {
-            model: this.model,
+            model,
             max_tokens: options.maxTokens + (useThinking ? thinkingBudget : 0),
             ...(systemMessage ? { system: systemMessage.content } : {}),
             messages: conversationMessages,
@@ -173,12 +233,12 @@ export class AnthropicProvider implements AIProvider {
 
   private disableThinking = false;
 
-  private supportsThinking(): boolean {
+  private supportsThinking(modelName: string): boolean {
     if (this.disableThinking) return false;
     // Extended thinking is supported on Claude 3.5+/4+ and GLM-4.5+/5.x. If a
     // provider rejects the thinking param, isThinkingUnsupportedError() below
     // triggers a one-time retry without it.
-    const model = this.model.toLowerCase();
+    const model = modelName.toLowerCase();
     return model.includes('claude-3') || model.includes('claude-opus')
       || model.includes('claude-sonnet') || model.includes('claude-haiku')
       || model.includes('glm');
@@ -192,6 +252,23 @@ export class AnthropicProvider implements AIProvider {
       );
     }
     return false;
+  }
+
+  /**
+   * True when a model was rejected because the endpoint doesn't recognise it —
+   * the trigger to fall back to the next candidate. Matches Anthropic's
+   * not_found_error and z.ai/GLM's `[1211] Unknown Model, please check the model
+   * code.` Works on both raw APIErrors and the wrapped retry error (string match).
+   */
+  private isUnknownModelError(error: unknown): boolean {
+    if (error instanceof Anthropic.APIError && error.status === 404) return true;
+    const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    return msg.includes('unknown model')
+      || msg.includes('check the model code')
+      || msg.includes('1211')
+      || msg.includes('not_found_error')
+      || (msg.includes('model') && msg.includes('does not exist'))
+      || (msg.includes('model') && msg.includes('not found'));
   }
 
   private isRetryableError(error: unknown): boolean {
