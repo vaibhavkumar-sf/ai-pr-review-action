@@ -1,10 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { AIProvider, ChatMessage, ChatOptions, ChatResponse } from './ai-provider';
+import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResult } from './ai-provider';
 import * as core from '@actions/core';
 
 // How often to emit a progress heartbeat while awaiting a streamed response, so a
 // long-running model call is visibly alive in the Action log instead of silent.
 const HEARTBEAT_INTERVAL_MS = 20000;
+// Timeout for the pre-flight probe. A healthy endpoint answers a 16-token request
+// in a few seconds; if it hangs past this, fail fast instead of wasting the full
+// agent_timeout later. Kept short on purpose.
+const DEFAULT_PREFLIGHT_TIMEOUT_MS = 45000;
 
 export class AnthropicProvider implements AIProvider {
   private client: Anthropic;
@@ -15,6 +19,8 @@ export class AnthropicProvider implements AIProvider {
   private maxRetries: number;
   private baseUrl: string;
   private thinkingBudget: number;
+  // Presence only — the key value is a secret and is never stored/logged.
+  private apiKeyProvided: boolean;
 
   constructor(
     baseUrl: string,
@@ -31,6 +37,7 @@ export class AnthropicProvider implements AIProvider {
     this.maxRetries = maxRetries;
     this.baseUrl = baseUrl;
     this.thinkingBudget = thinkingBudget;
+    this.apiKeyProvided = Boolean(apiKey && apiKey.trim().length > 0);
   }
 
   /** The model already confirmed to work, or the first candidate if none tried yet. */
@@ -45,6 +52,7 @@ export class AnthropicProvider implements AIProvider {
    * (e.g. a z.ai/GLM endpoint lists glm-* ids and only maps Claude-tier names).
    */
   async logDiagnostics(): Promise<void> {
+    core.info('════════════════ AI CONNECTIVITY ════════════════');
     core.info(
       this.models.length > 1
         ? `AI model fallback chain: ${this.models.join(' → ')}`
@@ -57,6 +65,13 @@ export class AnthropicProvider implements AIProvider {
       // keep the raw value if it is not a parseable URL
     }
     core.info(`AI endpoint: ${host}`);
+    // Presence check only — catches an empty/misconfigured secret early. The key
+    // value is never printed (it is a secret; GitHub masks it regardless).
+    core.info(
+      this.apiKeyProvided
+        ? 'AI auth token: present'
+        : 'AI auth token: MISSING — set the ANTHROPIC_AUTH_TOKEN secret',
+    );
 
     try {
       // Anthropic-compatible endpoints expose GET /v1/models.
@@ -78,6 +93,78 @@ export class AnthropicProvider implements AIProvider {
     core.info(
       'Debug locally (export your key first, e.g. `export ANTHROPIC_AUTH_TOKEN=...`):\n'
       + `  curl -sS '${modelsUrl}' -H "x-api-key: $ANTHROPIC_AUTH_TOKEN" -H "anthropic-version: 2023-06-01"`,
+    );
+  }
+
+  /**
+   * Pre-flight connectivity probe. Sends a minimal request (16 tokens, no
+   * thinking) so we learn — cheaply and quickly — whether the endpoint answers
+   * and which candidate model works, BEFORE gathering PR/JIRA context. Advances
+   * through the fallback chain on "unknown model" and latches the winner so the
+   * real review call skips re-probing. Throws a clear error if none respond.
+   */
+  async verifyConnection(timeoutMs: number = DEFAULT_PREFLIGHT_TIMEOUT_MS): Promise<ConnectionCheckResult> {
+    const candidates = this.resolvedModel ? [this.resolvedModel] : this.models;
+    let lastError: Error | undefined;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const model = candidates[i];
+      const t0 = Date.now();
+      let timedOut = false;
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        abortController.abort();
+      }, timeoutMs);
+
+      try {
+        core.info(`Pre-flight: probing ${model} (timeout ${Math.round(timeoutMs / 1000)}s)…`);
+        const stream = this.client.messages.stream(
+          {
+            model,
+            max_tokens: 16,
+            temperature: 0,
+            messages: [{ role: 'user', content: 'Reply with the single word: OK' }],
+          } as unknown as Anthropic.MessageStreamParams,
+          { signal: abortController.signal },
+        );
+        stream.on('error', () => { /* delivered via finalMessage() rejection */ });
+        const msg = await stream.finalMessage();
+        clearTimeout(timeoutId);
+
+        const latencyMs = Date.now() - t0;
+        if (!this.resolvedModel) {
+          this.resolvedModel = model;
+        }
+        core.info(
+          `Pre-flight OK: ${model} answered in ${(latencyMs / 1000).toFixed(1)}s `
+          + `(${msg.usage.output_tokens} out tok). Proceeding.`,
+        );
+        return { model, latencyMs, outputTokens: msg.usage.output_tokens };
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if (this.isUnknownModelError(error)) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          const next = candidates[i + 1];
+          core.warning(
+            `Pre-flight: model "${model}" rejected as unknown`
+            + (next ? `; trying "${next}"` : ' — no more fallbacks'),
+          );
+          continue;
+        }
+        // Connectivity/timeout/auth failure — record a clear message and stop.
+        lastError = timedOut
+          ? new Error(
+              `${model} did not respond within ${Math.round(timeoutMs / 1000)}s `
+              + '(endpoint hung — no first token). The AI endpoint is unreachable or overloaded.',
+            )
+          : error instanceof Error ? error : new Error(String(error));
+        break;
+      }
+    }
+
+    throw new Error(
+      `AI pre-flight check failed (${candidates.join(', ')}): ${lastError?.message ?? 'Unknown error'}`,
     );
   }
 
