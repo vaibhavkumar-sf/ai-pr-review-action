@@ -3,6 +3,10 @@ import { getEnabledAgents } from './profiles';
 
 export const DEFAULT_MODEL = 'claude-opus-4-8';
 export const DEFAULT_MAX_TOKENS = 8192;
+// Conservative total context window (tokens). GLM-4.6 and most Anthropic-compatible
+// proxies are ~200K; the assembled prompt is trimmed to fit within this minus the
+// reserved output. Raise to 1000000 when pointing at real Claude Opus 4.8.
+export const DEFAULT_CONTEXT_WINDOW = 200000;
 // Combined mode returns one large findings array; a higher floor avoids truncated JSON
 export const DEFAULT_COMBINED_MAX_TOKENS = 16384;
 export const DEFAULT_TEMPERATURE = 0.2;
@@ -64,6 +68,7 @@ export function buildDefaultConfig(): ActionConfig {
     anthropicBaseUrl: DEFAULT_ANTHROPIC_BASE_URL,
     anthropicModel: DEFAULT_MODEL,
     maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow: DEFAULT_CONTEXT_WINDOW,
     temperature: DEFAULT_TEMPERATURE,
 
     githubToken: '',

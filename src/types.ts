@@ -82,6 +82,11 @@ export interface ActionConfig {
   anthropicBaseUrl: string;
   anthropicModel: string;
   maxTokens: number;
+  // Total context window of the target model, in tokens. The assembled prompt is
+  // trimmed to fit within (contextWindow - reserved output) so requests are not
+  // rejected with model_context_window_exceeded. Default 200000 (GLM-4.6 / most
+  // Anthropic-compatible endpoints); raise to 1000000 for Claude Opus 4.8.
+  contextWindow: number;
   temperature: number;
 
   // GitHub
