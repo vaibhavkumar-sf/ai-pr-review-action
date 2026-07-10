@@ -134,10 +134,13 @@ export class AnthropicProvider implements AIProvider {
 
   private supportsThinking(): boolean {
     if (this.disableThinking) return false;
-    // Extended thinking is supported on Claude 3.5+ and Claude 4+ models
+    // Extended thinking is supported on Claude 3.5+/4+ and GLM-4.5+/5.x. If a
+    // provider rejects the thinking param, isThinkingUnsupportedError() below
+    // triggers a one-time retry without it.
     const model = this.model.toLowerCase();
     return model.includes('claude-3') || model.includes('claude-opus')
-      || model.includes('claude-sonnet') || model.includes('claude-haiku');
+      || model.includes('claude-sonnet') || model.includes('claude-haiku')
+      || model.includes('glm');
   }
 
   private isThinkingUnsupportedError(error: unknown): boolean {
