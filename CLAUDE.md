@@ -22,7 +22,7 @@ Findings are posted as structured PR comments with inline code annotations, and 
 | Action inputs | `action.yml` |
 | Architecture docs | `docs/architecture.md` |
 | Examples | `examples/*.yml` |
-| Default model | `claude-opus-4-6-20250610` (Opus 4.6, 1M context) |
+| Default model | `claude-opus-4-8` (Opus 4.8, 1M context) |
 
 ## Build & Run
 
