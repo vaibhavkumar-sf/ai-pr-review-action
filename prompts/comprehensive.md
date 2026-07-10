@@ -204,3 +204,4 @@ No inline interfaces, schemas, anonymous object types, or string-literal unions 
 5. Create ONE finding per violation with the exact line number and a concrete fix.
 6. Count your findings before responding: if the PR is non-trivial and you have fewer than 15, re-scan.
 7. Return valid JSON matching the schema above. Keep descriptions tight so the full findings array always fits in the response.
+8. Your entire response must be ONLY the JSON object — start with `{` and end with `}`. Do NOT add any prose before or after it, and do NOT wrap it in markdown code fences.

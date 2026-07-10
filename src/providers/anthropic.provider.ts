@@ -80,6 +80,7 @@ export class AnthropicProvider implements AIProvider {
             content,
             inputTokens: response.usage.input_tokens,
             outputTokens: response.usage.output_tokens,
+            stopReason: response.stop_reason,
           };
         } finally {
           clearTimeout(timeoutId);

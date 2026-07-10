@@ -1,8 +1,15 @@
 import { AIProvider, ChatMessage } from '../providers/ai-provider';
 import { ActionConfig, AgentResult, Finding, ReviewCategory, ReviewContext } from '../types';
+import { extractJsonObject } from '../utils/json';
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
+
+const JSON_REPAIR_INSTRUCTION =
+  'Your previous response did not contain a valid JSON object. Respond now with '
+  + 'ONLY the JSON object described in the system prompt — start with `{`, end with '
+  + '`}`, no prose before or after, and no markdown code fences. Keep descriptions '
+  + 'concise so the entire findings array fits within the response.';
 
 export abstract class BaseAgent {
   abstract readonly name: string;
@@ -19,13 +26,55 @@ export abstract class BaseAgent {
     const startTime = Date.now();
     try {
       const messages = this.buildMessages(context);
-      const response = await this.provider.chat(messages, {
-        maxTokens: this.getMaxTokens(),
+      const maxTokens = this.getMaxTokens();
+      let response = await this.provider.chat(messages, {
+        maxTokens,
         temperature: this.config.temperature,
         timeout: this.config.agentTimeout * 1000,
       });
 
-      const parsed = this.parseResponse(response.content);
+      let parsed = this.tryParseResponse(response.content);
+
+      // Auto-heal: the first response had no parseable JSON (the model returned
+      // prose, wrapped/trailing text, or truncated JSON). Feed the broken output
+      // back and ask once more for a clean JSON-only object. Extended thinking
+      // stays enabled — its budget is allocated on top of maxTokens, so it never
+      // starves the text output.
+      if (!parsed) {
+        core.warning(
+          `Agent ${this.name}: first response had no parseable JSON `
+          + `(stop_reason=${response.stopReason ?? 'unknown'}, `
+          + `text_len=${response.content.length}); auto-healing with a JSON-only retry`,
+        );
+        response = await this.provider.chat(
+          this.buildRepairMessages(messages, response.content),
+          {
+            maxTokens,
+            temperature: this.config.temperature,
+            timeout: this.config.agentTimeout * 1000,
+          },
+        );
+        parsed = this.tryParseResponse(response.content);
+      }
+
+      if (!parsed) {
+        const snippet = response.content.slice(0, 300).replace(/\s+/g, ' ').trim();
+        core.warning(
+          `Agent ${this.name}: no parseable JSON after repair retry `
+          + `(stop_reason=${response.stopReason ?? 'unknown'}, `
+          + `text_len=${response.content.length}). First 300 chars: ${snippet || '(empty)'}`,
+        );
+        return {
+          agentName: this.name,
+          category: this.category,
+          findings: [],
+          summary: 'Failed to parse response',
+          score: 0,
+          durationMs: Date.now() - startTime,
+          error: 'unparseable response (no JSON object)',
+        };
+      }
+
       return {
         agentName: this.name,
         category: this.category,
@@ -234,46 +283,61 @@ export abstract class BaseAgent {
     return this.category;
   }
 
-  protected parseResponse(content: string): { findings: Finding[]; summary: string; score: number } {
-    try {
-      // Try to extract JSON from the response (may be wrapped in markdown code blocks)
-      const jsonMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/) || [null, content];
-      const jsonStr = jsonMatch[1] || content;
-
-      // Find the JSON object in the string
-      const startIdx = jsonStr.indexOf('{');
-      const endIdx = jsonStr.lastIndexOf('}');
-      if (startIdx === -1 || endIdx === -1) {
-        throw new Error('No JSON object found in response');
-      }
-
-      const parsed = JSON.parse(jsonStr.substring(startIdx, endIdx + 1));
-
-      const validSeverities = new Set(['critical', 'high', 'medium', 'low', 'nit']);
-
-      const findings: Finding[] = (parsed.findings || []).map((f: Record<string, unknown>) => ({
-        severity: validSeverities.has(f.severity as string) ? f.severity as Finding['severity'] : 'medium',
-        category: this.resolveCategory(f.category),
-        file: f.file || '',
-        line: f.line || 0,
-        endLine: f.endLine || f.end_line,
-        title: f.title || 'Untitled finding',
-        description: f.description || '',
-        suggestion: f.suggestion,
-        codeSuggestion: f.code_suggestion || f.codeSuggestion,
-      }));
-
-      return {
-        findings,
-        summary: parsed.summary || '',
-        score: typeof parsed.score === 'number' ? parsed.score : 5,
-      };
-    } catch (error) {
-      core.warning(
-        `Failed to parse ${this.name} agent response: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return { findings: [], summary: 'Failed to parse response', score: 0 };
+  /**
+   * Builds the follow-up conversation for the auto-healing JSON-only retry.
+   * When the model returned some (unparseable) text we feed it back so it can
+   * correct its own output; when it returned nothing we just re-issue the ask.
+   */
+  protected buildRepairMessages(original: ChatMessage[], brokenContent: string): ChatMessage[] {
+    const repair: ChatMessage[] = [...original];
+    if (brokenContent.trim()) {
+      repair.push({ role: 'assistant', content: brokenContent });
     }
+    repair.push({ role: 'user', content: JSON_REPAIR_INSTRUCTION });
+    return repair;
+  }
+
+  /**
+   * Parses an agent response into findings. Returns null (rather than an empty
+   * result) when no JSON object can be recovered, so the caller can trigger the
+   * auto-healing retry and only give up after that also fails.
+   */
+  protected tryParseResponse(
+    content: string,
+  ): { findings: Finding[]; summary: string; score: number } | null {
+    const jsonStr = extractJsonObject(content);
+    if (!jsonStr) return null;
+
+    let parsed: { findings?: Record<string, unknown>[]; summary?: unknown; score?: unknown };
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (error) {
+      core.debug(
+        `Agent ${this.name}: JSON.parse failed on extracted object: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+
+    const validSeverities = new Set(['critical', 'high', 'medium', 'low', 'nit']);
+
+    const findings: Finding[] = (parsed.findings || []).map((f: Record<string, unknown>) => ({
+      severity: validSeverities.has(f.severity as string) ? f.severity as Finding['severity'] : 'medium',
+      category: this.resolveCategory(f.category),
+      file: f.file || '',
+      line: f.line || 0,
+      endLine: f.endLine || f.end_line,
+      title: f.title || 'Untitled finding',
+      description: f.description || '',
+      suggestion: f.suggestion,
+      codeSuggestion: f.code_suggestion || f.codeSuggestion,
+    })) as Finding[];
+
+    return {
+      findings,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      score: typeof parsed.score === 'number' ? parsed.score : 5,
+    };
   }
 }
 
