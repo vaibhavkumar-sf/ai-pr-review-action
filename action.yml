@@ -183,7 +183,10 @@ inputs:
   agent_timeout:
     description: 'Timeout in seconds for each review agent AI call'
     required: false
-    default: '300'
+    # 600s (not 300) because glm-5.2 with high thinking_budget can spend ~350-450s
+    # thinking before it writes findings; 300s cut it off mid-thought → 0 findings.
+    # Must match DEFAULT_AGENT_TIMEOUT in src/config/defaults.ts.
+    default: '600'
   max_retries:
     description: 'Maximum retries per agent on AI API failure'
     required: false
