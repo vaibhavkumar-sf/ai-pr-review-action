@@ -7,6 +7,14 @@ export interface ChatOptions {
   maxTokens: number;
   temperature: number;
   timeout: number;
+  /**
+   * Per-call extended-thinking budget override (tokens). Omit to use the
+   * provider default. Set to 0 to DISABLE thinking for this call — used for
+   * cosmetic/formatting calls (PR description, diagrams) where deep reasoning
+   * adds latency without value. The code-review calls omit this and keep full
+   * thinking.
+   */
+  thinkingBudget?: number;
 }
 
 export interface ChatResponse {
