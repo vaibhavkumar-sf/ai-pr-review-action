@@ -21,7 +21,12 @@ export const DEFAULT_REVIEW_MODE: ReviewMode = 'combined';
 export const DEFAULT_FRAMEWORK: Framework = 'auto';
 export const DEFAULT_FAIL_THRESHOLD: FailThreshold = 'critical';
 export const DEFAULT_MAX_FILES = 50;
-export const DEFAULT_AGENT_TIMEOUT = 300;
+// Per-agent API timeout (seconds). High by default because extended thinking is
+// on (thinking_budget=16384): finishing a full thinking budget on a large prompt
+// can take ~7-8 minutes end-to-end, so 300s was too short and truncated the call
+// before it could write findings. Thinking is capped by its budget, so this is
+// bounded across PR sizes; lower thinking_budget if you prefer faster reviews.
+export const DEFAULT_AGENT_TIMEOUT = 600;
 export const DEFAULT_MAX_RETRIES = 3;
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 

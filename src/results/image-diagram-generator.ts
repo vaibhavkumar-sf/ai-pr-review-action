@@ -249,16 +249,13 @@ async function generateMermaidDiagrams(
   userPrompt += `**Files changed:** ${context.changedFiles.map(f => `${f.filename} (${f.status})`).join(', ')}\n\n`;
   userPrompt += `**Diff:**\n\`\`\`diff\n${context.diff.substring(0, 4000)}\n\`\`\`\n`;
 
-  // Try modern (rich) diagrams first
-  core.info('Generating modern styled Mermaid diagrams...');
-  const modern = await tryGenerateDiagrams(MODERN_PROMPT, userPrompt, provider, 3);
-  if (modern.flowchart || modern.sequence) {
-    return modern;
-  }
-
-  // Fall back to simple diagrams if modern fails
-  core.info('Modern diagrams failed, falling back to simple version...');
-  return tryGenerateDiagrams(SIMPLE_PROMPT, userPrompt, provider, 2);
+  // Diagrams are cosmetic. The "modern" prompt's %%{init}%% theming, style
+  // directives, subgraphs and `&` connectors are exactly what GitHub's Mermaid
+  // parser rejects, which drove a multi-minute validation-retry loop. Favor the
+  // simple, reliable prompt with a single retry — reliability + speed over
+  // styling. (MODERN_PROMPT is kept for reference / opt-in.)
+  core.info('Generating Mermaid diagrams...');
+  return tryGenerateDiagrams(SIMPLE_PROMPT, userPrompt, provider, 1);
 }
 
 async function tryGenerateDiagrams(
@@ -275,7 +272,10 @@ async function tryGenerateDiagrams(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const response = await provider.chat(
       messages,
-      { maxTokens: 4096, temperature: 0.3, timeout: 300000 },
+      // Cosmetic diagram generation — no extended thinking (faster; each retry
+      // was a full ~40s thinking call). Bounded timeout so diagrams never
+      // dominate the run.
+      { maxTokens: 4096, temperature: 0.3, timeout: 120000, thinkingBudget: 0 },
     );
 
     const diagrams = parseDiagramResponse(response.content);
