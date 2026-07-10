@@ -46,7 +46,35 @@ export async function runReview(config: ActionConfig): Promise<void> {
   }
   core.setOutput('bot_comments_hidden', botCommentsHidden);
 
-  // 3. Gather all context
+  // 3. Verify the AI endpoint answers BEFORE any expensive context gathering.
+  // A hung or unreachable model should fail fast and loud here, not after a
+  // multi-minute stall that silently yields zero findings. This probe also
+  // resolves which model in the fallback chain works and latches it.
+  const provider = createAIProvider(config);
+  await provider.logDiagnostics();
+  await commenter.postOrUpdateComment(
+    '## 🔌 AI Code Review\n\nVerifying AI model connection...',
+  );
+  try {
+    const check = await provider.verifyConnection();
+    logger.info(
+      `AI connection verified: ${check.model} (${(check.latencyMs / 1000).toFixed(1)}s round-trip)`,
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    await commenter.postOrUpdateComment(
+      `## ❌ AI Code Review\n\nAI model connection check failed — not proceeding.\n\n` +
+      `\`\`\`\n${msg}\n\`\`\`\n\n` +
+      `The review was skipped to avoid gathering context against an unreachable model. ` +
+      `Check the \`ANTHROPIC_BASE_URL\` / \`ANTHROPIC_AUTH_TOKEN\` secrets and the endpoint status, then re-run.`,
+    );
+    core.setOutput('review_status', 'failed');
+    core.setOutput('skip_reason', 'ai_unreachable');
+    core.setFailed(`AI pre-flight check failed: ${msg}`);
+    return;
+  }
+
+  // 4. Gather all context
   let context: ReviewContext;
   try {
     context = await gatherAllContext(config);
@@ -81,9 +109,7 @@ export async function runReview(config: ActionConfig): Promise<void> {
     return;
   }
 
-  // 5. Create AI provider and agents
-  const provider = createAIProvider(config);
-  await provider.logDiagnostics();
+  // 6. Create review agents (provider was created and verified in step 3)
   const agents = createAgents(provider, config);
 
   if (agents.length === 0) {
