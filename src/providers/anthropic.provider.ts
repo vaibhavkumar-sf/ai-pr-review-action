@@ -56,12 +56,19 @@ export class AnthropicProvider implements AIProvider {
             requestParams.temperature = options.temperature;
           }
 
-          const response = await this.client.messages.create(
-            requestParams as unknown as Anthropic.MessageCreateParamsNonStreaming,
+          // Stream the response and accumulate the final message. Streaming is
+          // required whenever max_tokens is large enough that the SDK estimates
+          // the request could exceed 10 minutes (max_tokens > ~21k, which the
+          // combined-mode floor + thinking budget reaches) — the non-streaming
+          // create() throws "Streaming is strongly recommended..." before ever
+          // hitting the network. finalMessage() returns the same Message shape.
+          const stream = this.client.messages.stream(
+            requestParams as unknown as Anthropic.MessageStreamParams,
             {
               signal: abortController.signal,
             },
           );
+          const response = await stream.finalMessage();
 
           // Extract text content (skip thinking blocks)
           const content = response.content
