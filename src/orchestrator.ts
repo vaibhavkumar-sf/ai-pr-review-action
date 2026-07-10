@@ -365,7 +365,9 @@ async function appendToPRDescription(
         { role: 'system', content: descriptionPrompt.system },
         { role: 'user', content: descriptionPrompt.user },
       ],
-      { maxTokens: 4096, temperature: 0.3, timeout: 300000 },
+      // Cosmetic PR-description writing — no extended thinking (faster; thinking
+      // adds latency without improving formatting).
+      { maxTokens: 4096, temperature: 0.3, timeout: 120000, thinkingBudget: 0 },
     );
     aiGeneratedContent = sanitizeMermaid(response.content);
     // Validate mermaid blocks via Kroki — strip any that fail parsing

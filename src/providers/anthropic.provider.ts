@@ -228,8 +228,11 @@ export class AnthropicProvider implements AIProvider {
     // Extended thinking for deeper reasoning. The budget is added on top of
     // max_tokens (so it never starves the text output) and stays >= the 1024
     // floor the API requires. When thinking is on, temperature must be 1.
-    const thinkingBudget = Math.max(this.thinkingBudget, 1024);
-    const useThinking = this.supportsThinking(model);
+    // A per-call override of 0 (or any value < the 1024 floor) disables thinking
+    // for that call — used for cosmetic calls (PR description, diagrams).
+    const requestedBudget = options.thinkingBudget ?? this.thinkingBudget;
+    const thinkingBudget = Math.max(requestedBudget, 1024);
+    const useThinking = this.supportsThinking(model) && requestedBudget >= 1024;
     const timeoutSec = Math.round(options.timeout / 1000);
 
     let lastError: Error | undefined;
