@@ -4,45 +4,13 @@ import { ActionConfig, ReviewContext } from '../types';
 import { AIProvider } from '../providers/ai-provider';
 import { PRCommenter } from './pr-commenter';
 import { INLINE_COMMENT_MARKER } from './inline-reviewer';
+import { fetchReviewThreads, makeLoginMatchers, ReviewThread, ThreadComment } from './threads';
+import { extractJsonObject } from '../utils/json';
+import { addLineNumbers } from '../utils/text';
+import { loadPrompt } from '../prompts/loader';
+import { REPLY_CODE_CONTEXT_LINES, REPLY_VERDICT_MAX_TOKENS } from '../config/limits';
 
 export const REPLY_MARKER = '<!-- ai-pr-review-reply -->';
-
-const CODE_CONTEXT_LINES = 60;
-
-const VERDICT_SYSTEM_PROMPT = `You are a code review discussion arbiter. A previous AI code review posted a finding as an inline PR comment, and a human has replied to it (disagreeing, claiming it is fixed, asking a question, or adding context).
-
-Your job: verify the human's reply against the CURRENT code and decide whether they are correct.
-
-Rules:
-1. Judge strictly from the code provided — never take the human's claim on faith, and never dismiss it without checking the code.
-2. If the human is correct (the finding was wrong, doesn't apply, or the issue is now fixed in the code), acknowledge it plainly and say why.
-3. If the human is incorrect or the issue still exists, explain exactly why with reference to the current code (line numbers, identifiers).
-4. If the reply is a question, answer it concretely from the code.
-5. Be respectful and concise (2-5 sentences). No headings, no severity tags — this is a conversation reply.
-
-Return ONLY valid JSON:
-{
-  "user_is_correct": true|false,
-  "issue_resolved": true|false,
-  "reply": "The markdown reply to post in the thread"
-}
-
-"user_is_correct" = their objection/claim is valid. "issue_resolved" = the original issue no longer exists in the current code (whether or not the human argued it). Resolve-worthy threads are those where either is true.`;
-
-interface ThreadComment {
-  databaseId: number | null;
-  author: { login: string } | null;
-  body: string;
-  path: string;
-  line: number | null;
-  createdAt: string;
-}
-
-interface ReviewThread {
-  id: string;
-  isResolved: boolean;
-  comments: { nodes: ThreadComment[] };
-}
 
 export interface ReplyHandlingResult {
   repliesPosted: number;
@@ -70,41 +38,11 @@ export class ReplyHandler {
 
     const user = await this.commenter.getAuthenticatedUser();
     if (!user) return result;
-    const botLoginVariant = user.replace('[bot]', '');
-    const isOurLogin = (login: string): boolean =>
-      login === user || login === botLoginVariant;
-    const isHuman = (login: string): boolean =>
-      !isOurLogin(login) && !login.endsWith('[bot]') && !/^(github-actions|sonarqubecloud|sonarcloud|dependabot|renovate)$/.test(login);
+    const { isOurLogin, isHuman } = makeLoginMatchers(user);
 
     let threads: ReviewThread[];
     try {
-      const data: {
-        repository: { pullRequest: { reviewThreads: { nodes: ReviewThread[] } } };
-      } = await this.octokit.graphql(`
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviewThreads(first: 100) {
-                nodes {
-                  id
-                  isResolved
-                  comments(first: 30) {
-                    nodes {
-                      databaseId
-                      author { login }
-                      body
-                      path
-                      line
-                      createdAt
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `, { owner: this.config.owner, repo: this.config.repo, number: this.config.prNumber });
-      threads = data.repository.pullRequest.reviewThreads.nodes;
+      threads = await fetchReviewThreads(this.octokit, this.config.owner, this.config.repo, this.config.prNumber);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       core.warning(`Reply handling: failed to fetch review threads: ${msg}`);
@@ -204,16 +142,19 @@ export class ReplyHandler {
     try {
       const response = await this.provider.chat(
         [
-          { role: 'system', content: VERDICT_SYSTEM_PROMPT },
+          { role: 'system', content: loadPrompt('system/reply-verdict') },
           { role: 'user', content: user },
         ],
-        { maxTokens: 2048, temperature: 0.2, timeout: this.config.agentTimeout * 1000 },
+        {
+          maxTokens: REPLY_VERDICT_MAX_TOKENS,
+          temperature: this.config.temperature,
+          timeout: this.config.agentTimeout * 1000,
+        },
       );
 
-      const jsonStart = response.content.indexOf('{');
-      const jsonEnd = response.content.lastIndexOf('}');
-      if (jsonStart === -1 || jsonEnd === -1) return null;
-      const parsed = JSON.parse(response.content.substring(jsonStart, jsonEnd + 1));
+      const jsonStr = extractJsonObject(response.content);
+      if (!jsonStr) return null;
+      const parsed = JSON.parse(jsonStr);
       if (typeof parsed.reply !== 'string' || !parsed.reply.trim()) return null;
 
       return {
@@ -256,13 +197,9 @@ export class ReplyHandler {
     if (!content) return '(file content unavailable)';
 
     const lines = content.split('\n');
-    const start = Math.max(0, line - 1 - CODE_CONTEXT_LINES);
-    const end = Math.min(lines.length, line + CODE_CONTEXT_LINES);
-    const padding = String(end).length;
-    return lines
-      .slice(start, end)
-      .map((text, i) => `${String(start + i + 1).padStart(padding)} | ${text}`)
-      .join('\n');
+    const start = Math.max(0, line - 1 - REPLY_CODE_CONTEXT_LINES);
+    const end = Math.min(lines.length, line + REPLY_CODE_CONTEXT_LINES);
+    return addLineNumbers(lines.slice(start, end).join('\n'), start + 1);
   }
 }
 

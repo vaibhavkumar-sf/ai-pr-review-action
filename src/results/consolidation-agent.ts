@@ -1,56 +1,14 @@
 import { AIProvider } from '../providers/ai-provider';
 import { Finding } from '../types';
 import { extractJsonObject } from '../utils/json';
+import { loadPrompt } from '../prompts/loader';
+import { coerceCategory, coerceFinding } from '../config/taxonomy';
+import {
+  CONSOLIDATION_MAX_TOKENS,
+  CONSOLIDATION_SKIP_THRESHOLD,
+  CONSOLIDATION_TEMPERATURE,
+} from '../config/limits';
 import * as core from '@actions/core';
-
-const CONSOLIDATION_SYSTEM_PROMPT = `You are a code review consolidation agent. Your job is to take a list of findings from multiple specialist review agents and consolidate them into a clean, non-redundant list.
-
-## Rules
-
-1. **Identify duplicates**: Two findings about the SAME issue at the SAME location (same file, within 3 lines) are duplicates — even if worded differently by different agents.
-   - Example: "Missing return type" (type-safety agent) and "Function return type not declared" (code-quality agent) on the same function → merge into ONE finding.
-   - Example: "Missing input validation" (security agent) and "No parameter type check" (code-quality agent) on the same line → merge into ONE finding.
-
-2. **Merge duplicates**:
-   - Keep the **highest severity** among the duplicates
-   - Use the **most descriptive title** (prefer specific over generic)
-   - **Combine descriptions** — include unique insights from each agent, separated by paragraphs. Do NOT repeat the same point.
-   - Keep the **best suggestion** and **best code suggestion** (prefer the most actionable one)
-   - Use the **most specific category** for the issue (e.g., "security" over "code-quality" for a validation issue)
-
-3. **DO NOT remove findings that are genuinely different issues**, even if on the same line. A line can have both a security issue AND a performance issue — those are separate.
-
-4. **DO NOT modify findings that have no duplicates** — pass them through unchanged.
-
-5. **DO NOT change line numbers, file paths, or invent new issues.**
-
-## Output Format
-
-Return a JSON object:
-\`\`\`json
-{
-  "consolidated": [
-    {
-      "severity": "high",
-      "category": "security",
-      "file": "src/example.ts",
-      "line": 42,
-      "endLine": 45,
-      "title": "Consolidated title here",
-      "description": "Combined description here",
-      "suggestion": "Best suggestion here",
-      "codeSuggestion": "best code fix here"
-    }
-  ],
-  "mergeLog": [
-    "Merged findings #2 and #5: both flag missing return type on processData()",
-    "Merged findings #1, #3, #7: all flag missing validation on line 26"
-  ]
-}
-\`\`\`
-
-The \`mergeLog\` is for debugging — briefly note which findings were merged and why.
-Only output JSON. No other text.`;
 
 /**
  * Uses an AI call to semantically consolidate findings from all agents,
@@ -63,8 +21,8 @@ export async function consolidateFindings(
   timeout: number,
 ): Promise<Finding[]> {
   // Skip consolidation if too few findings to have duplicates
-  if (findings.length <= 3) {
-    core.debug('Skipping consolidation: 3 or fewer findings');
+  if (findings.length <= CONSOLIDATION_SKIP_THRESHOLD) {
+    core.debug(`Skipping consolidation: ${CONSOLIDATION_SKIP_THRESHOLD} or fewer findings`);
     return findings;
   }
 
@@ -74,10 +32,10 @@ export async function consolidateFindings(
     core.info(`Running consolidation agent on ${findings.length} findings...`);
     const response = await provider.chat(
       [
-        { role: 'system' as const, content: CONSOLIDATION_SYSTEM_PROMPT },
+        { role: 'system' as const, content: loadPrompt('system/consolidation') },
         { role: 'user' as const, content: userPrompt },
       ],
-      { maxTokens: 8192, temperature: 0.1, timeout },
+      { maxTokens: CONSOLIDATION_MAX_TOKENS, temperature: CONSOLIDATION_TEMPERATURE, timeout },
     );
 
     const consolidated = parseResponse(response.content, findings);
@@ -140,27 +98,14 @@ function parseResponse(content: string, originalFindings: Finding[]): Finding[] 
       }
     }
 
-    // Map back to Finding objects, validating each
-    return consolidated.map((f: Record<string, unknown>): Finding => ({
-      severity: validateSeverity(f.severity as string) || 'medium',
-      category: (f.category as Finding['category']) || 'code-quality',
-      file: (f.file as string) || '',
-      line: (f.line as number) || 0,
-      endLine: f.endLine as number | undefined,
-      title: (f.title as string) || 'Untitled finding',
-      description: (f.description as string) || '',
-      suggestion: f.suggestion as string | undefined,
-      codeSuggestion: (f.codeSuggestion || f.code_suggestion) as string | undefined,
-    }));
+    // Map back to validated Finding objects
+    return consolidated.map(
+      (f: Record<string, unknown>) => coerceFinding(f, raw => coerceCategory(raw)),
+    );
   } catch (error) {
     core.warning(
       `Failed to parse consolidation response: ${error instanceof Error ? error.message : String(error)}`,
     );
     return originalFindings;
   }
-}
-
-function validateSeverity(severity: string): Finding['severity'] | null {
-  const valid = ['critical', 'high', 'medium', 'low', 'nit'];
-  return valid.includes(severity) ? (severity as Finding['severity']) : null;
 }

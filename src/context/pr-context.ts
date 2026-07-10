@@ -2,6 +2,8 @@ import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import { minimatch } from 'minimatch';
 import { ActionConfig, ChangedFile, DependencyFile } from '../types';
+import { extractRelativeImports, resolveRelativeImport } from '../utils/imports';
+import { DEP_FILE_MAX_CHARS, GITHUB_PER_PAGE, MAX_DEP_FILES } from '../config/limits';
 
 export async function gatherPRContext(config: ActionConfig): Promise<{
   prTitle: string;
@@ -47,20 +49,19 @@ export async function gatherPRContext(config: ActionConfig): Promise<{
   core.info('Fetching changed files list');
   const allFiles: Awaited<ReturnType<typeof octokit.pulls.listFiles>>['data'] = [];
   let page = 1;
-  const perPage = 100;
 
   while (true) {
     const { data: files } = await octokit.pulls.listFiles({
       owner,
       repo,
       pull_number: prNumber,
-      per_page: perPage,
+      per_page: GITHUB_PER_PAGE,
       page,
     });
 
     allFiles.push(...files);
 
-    if (files.length < perPage) {
+    if (files.length < GITHUB_PER_PAGE) {
       break;
     }
     page++;
@@ -184,16 +185,15 @@ async function fetchDependencyFiles(
 ): Promise<DependencyFile[]> {
   const changedPaths = new Set(changedFiles.map(f => f.filename));
   const depMap = new Map<string, Set<string>>(); // resolved path -> set of referencing files
-  const MAX_DEPS = 10;
 
   for (const file of changedFiles) {
     if (!file.content || file.status === 'removed') continue;
     // Only process TypeScript/JavaScript files
     if (!/\.[tj]sx?$/.test(file.filename)) continue;
 
-    const imports = extractImportPaths(file.content);
+    const imports = extractRelativeImports(file.content);
     for (const imp of imports) {
-      const resolved = resolveImport(file.filename, imp);
+      const resolved = resolveRelativeImport(file.filename, imp);
       if (!resolved) continue;
       // Skip if the resolved path is already a changed file
       if (changedPaths.has(resolved)) continue;
@@ -207,8 +207,8 @@ async function fetchDependencyFiles(
     }
   }
 
-  // Fetch up to MAX_DEPS dependency files
-  const depsToFetch = Array.from(depMap.entries()).slice(0, MAX_DEPS);
+  // Fetch up to MAX_DEP_FILES dependency files
+  const depsToFetch = Array.from(depMap.entries()).slice(0, MAX_DEP_FILES);
   const results: DependencyFile[] = [];
 
   const fetchPromises = depsToFetch.map(async ([depPath, referencedBy]) => {
@@ -226,8 +226,8 @@ async function fetchDependencyFiles(
         if (!Array.isArray(data) && data.type === 'file' && data.content) {
           const content = Buffer.from(data.content, 'base64').toString('utf-8');
           // Limit dependency file size to avoid token bloat
-          const truncated = content.length > 5000
-            ? content.substring(0, 5000) + '\n// ... truncated for context ...'
+          const truncated = content.length > DEP_FILE_MAX_CHARS
+            ? content.substring(0, DEP_FILE_MAX_CHARS) + '\n// ... truncated for context ...'
             : content;
           results.push({
             filename: candidate,
@@ -244,49 +244,6 @@ async function fetchDependencyFiles(
 
   await Promise.all(fetchPromises);
   return results;
-}
-
-/**
- * Extracts import/require paths from TypeScript/JavaScript source code.
- */
-function extractImportPaths(content: string): string[] {
-  const paths: string[] = [];
-  // ES imports: import ... from '...'
-  const esRegex = /import\s+(?:[\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g;
-  let match;
-  while ((match = esRegex.exec(content)) !== null) {
-    paths.push(match[1]);
-  }
-  // Dynamic imports: import('...')
-  const dynRegex = /import\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-  while ((match = dynRegex.exec(content)) !== null) {
-    paths.push(match[1]);
-  }
-  return paths.filter(p => p.startsWith('.'));
-}
-
-/**
- * Resolves a relative import path against the importing file's directory.
- */
-function resolveImport(fromFile: string, importPath: string): string | null {
-  const dir = fromFile.substring(0, fromFile.lastIndexOf('/'));
-  if (!dir && !importPath.startsWith('./')) return null;
-
-  const base = dir ? dir + '/' + importPath : importPath;
-  const parts = base.split('/');
-  const resolved: string[] = [];
-
-  for (const part of parts) {
-    if (part === '.' || part === '') continue;
-    if (part === '..') {
-      if (resolved.length === 0) return null; // Can't go above root
-      resolved.pop();
-    } else {
-      resolved.push(part);
-    }
-  }
-
-  return resolved.join('/');
 }
 
 function mapFileStatus(status: string): ChangedFile['status'] {

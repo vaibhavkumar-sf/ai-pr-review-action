@@ -1,0 +1,1 @@
+Your previous response did not contain a valid JSON object. Respond now with ONLY the JSON object described in the system prompt — start with `{`, end with `}`, no prose before or after, and no markdown code fences. Keep descriptions concise so the entire findings array fits within the response.

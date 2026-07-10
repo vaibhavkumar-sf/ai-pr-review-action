@@ -8,10 +8,13 @@
     "dev": "ts-node src/index.ts",
     "test": "jest --coverage",
     "test:watch": "jest --watch",
-    "lint": "eslint src/ --ext .ts",
-    "lint:fix": "eslint src/ --ext .ts --fix",
+    "lint": "eslint src/ tests/ scripts/",
+    "lint:fix": "eslint src/ tests/ scripts/ --fix",
     "clean": "rm -rf dist",
-    "prebuild": "npm run clean"
+    "prebuild": "npm run clean && npm run check:action",
+    "gen:action": "ts-node scripts/gen-action.ts",
+    "check:action": "ts-node scripts/gen-action.ts --check",
+    "ci": "npm run build && npm run lint && npm test"
   },
   "repository": {
     "type": "git",

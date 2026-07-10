@@ -1,7 +1,9 @@
 import { Octokit } from '@octokit/rest';
 import * as core from '@actions/core';
-import { Finding, ParsedDiff, Severity } from '../types';
+import { Finding, ParsedDiff } from '../types';
 import { findDiffPosition } from './diff-parser';
+import { SEVERITY_TAGS } from '../config/taxonomy';
+import { GITHUB_PER_PAGE, INLINE_DUPLICATE_PROXIMITY, INLINE_NEARBY_SEARCH_RANGE } from '../config/limits';
 
 /** Hidden HTML marker to reliably identify our inline comments regardless of bot login */
 export const INLINE_COMMENT_MARKER = '<!-- ai-pr-review-inline -->';
@@ -18,14 +20,6 @@ function buildFingerprintMarker(file: string, title: string): string {
   }
   return `<!-- ai-pr-review-fp:${(hash >>> 0).toString(16).padStart(8, '0')} -->`;
 }
-
-const SEVERITY_TAGS: Record<Severity, string> = {
-  critical: '\uD83D\uDED1 Critical',
-  high: '\uD83D\uDD34 High',
-  medium: '\uD83D\uDFE1 Medium',
-  low: '\uD83D\uDFE2 Low',
-  nit: '\uD83D\uDCAC Nit',
-};
 
 interface ReviewComment {
   path: string;
@@ -138,7 +132,7 @@ export class InlineReviewer {
           owner: this.owner,
           repo: this.repo,
           pull_number: this.prNumber,
-          per_page: 100,
+          per_page: GITHUB_PER_PAGE,
         },
       );
 
@@ -166,12 +160,12 @@ export class InlineReviewer {
     existing: Array<{ path: string; line: number; body: string }>,
   ): boolean {
     // Primary: location-based check — if ANY of our comments already exists
-    // at the same file+line (±2), it's a duplicate regardless of title.
+    // at the same file+line (± proximity), it's a duplicate regardless of title.
     // Different agents/runs generate different titles for the same issue.
     const hasCommentAtLocation = existing.some(c =>
       c.path === finding.file &&
       c.line !== 0 &&
-      Math.abs(c.line - finding.line) <= 2,
+      Math.abs(c.line - finding.line) <= INLINE_DUPLICATE_PROXIMITY,
     );
     if (hasCommentAtLocation) {
       return true;
@@ -269,7 +263,7 @@ export class InlineReviewer {
   ): number | null {
     const candidates: Array<{ line: number; offset: number }> = [];
 
-    for (let offset = 1; offset <= 3; offset++) {
+    for (let offset = 1; offset <= INLINE_NEARBY_SEARCH_RANGE; offset++) {
       if (findDiffPosition(parsedDiffs, filename, targetLine + offset) !== null) {
         candidates.push({ line: targetLine + offset, offset });
       }

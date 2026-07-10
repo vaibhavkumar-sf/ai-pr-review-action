@@ -2,25 +2,14 @@ import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import { ReviewCategory } from '../types';
 import { INLINE_COMMENT_MARKER } from './inline-reviewer';
-import { BOT_HIDE_ALL_PATTERNS } from '../config/defaults';
+import { fetchReviewThreads, KNOWN_BOT_LOGINS, makeLoginMatchers, minimizeCommentById, resolveReviewThreadById } from './threads';
+import { AGENT_LABELS } from '../config/taxonomy';
+import { BOT_HIDE_ALL_PATTERNS } from '../config/patterns';
+import { GITHUB_PER_PAGE, STALE_THREAD_PROXIMITY } from '../config/limits';
 
 const COMMENT_MARKER = '<!-- ai-pr-review-action-comment -->';
 
-interface AgentStatus {
-  status: 'running' | 'done' | 'failed';
-  findingCount?: number;
-}
-
-const AGENT_LABELS: Record<ReviewCategory, string> = {
-  'security': '\uD83D\uDD12 Security',
-  'code-quality': '\uD83D\uDCDD Code Quality',
-  'performance': '\u26A1 Performance',
-  'type-safety': '\uD83D\uDD0D Type Safety',
-  'architecture': '\uD83C\uDFD7\uFE0F Architecture',
-  'testing': '\uD83E\uDDEA Testing',
-  'api-design': '\uD83D\uDD0C API Design',
-  'comprehensive': '\uD83D\uDD0E Comprehensive Review',
-};
+type AgentStatus = 'running' | 'done' | 'failed';
 
 export class PRCommenter {
   private agentStatuses: Map<string, AgentStatus> = new Map();
@@ -36,7 +25,7 @@ export class PRCommenter {
 
   /**
    * Posts a new comment or updates the one created during THIS run.
-   * On the first call of a new run, deletes any previous AI review summary
+   * On the first call of a new run, minimizes any previous AI review summary
    * comments (our own only) and creates a fresh one.
    */
   async postOrUpdateComment(body: string): Promise<{ commentId: number; commentUrl: string }> {
@@ -53,7 +42,7 @@ export class PRCommenter {
       return { commentId: updated.data.id, commentUrl: updated.data.html_url };
     }
 
-    // First call this run — delete old summary comments, then create new
+    // First call this run — minimize old summary comments, then create new
     await this.minimizeOldSummaryComments();
 
     const created = await this.octokit.issues.createComment({
@@ -67,28 +56,23 @@ export class PRCommenter {
     return { commentId: created.data.id, commentUrl: created.data.html_url };
   }
 
-  async updateProgress(
-    agentName: string,
-    status: 'running' | 'done' | 'failed',
-    findingCount?: number,
-  ): Promise<void> {
-    this.agentStatuses.set(agentName, { status, findingCount });
+  async updateProgress(agentName: string, status: AgentStatus): Promise<void> {
+    this.agentStatuses.set(agentName, status);
 
     const allDone = Array.from(this.agentStatuses.values()).every(
-      (s) => s.status === 'done' || s.status === 'failed',
+      (s) => s === 'done' || s === 'failed',
     );
 
     const statusLabel = allDone ? 'Consolidating...' : 'In Progress';
-    const headerEmoji = allDone ? '\u2699\uFE0F' : '\uD83D\uDD0D';
+    const headerEmoji = allDone ? '⚙️' : '🔍';
 
-    let body = `## ${headerEmoji} AI Code Review \u2014 ${statusLabel}\n\n`;
+    let body = `## ${headerEmoji} AI Code Review — ${statusLabel}\n\n`;
     body += '| Agent | Status |\n';
     body += '|-------|--------|\n';
 
     for (const [name, agentStatus] of this.agentStatuses) {
       const label = AGENT_LABELS[name as ReviewCategory] ?? name;
-      const statusText = this.formatStatus(agentStatus);
-      body += `| ${label} | ${statusText} |\n`;
+      body += `| ${label} | ${formatStatus(agentStatus)} |\n`;
     }
 
     await this.postOrUpdateComment(body);
@@ -110,53 +94,10 @@ export class PRCommenter {
     let resolved = 0;
 
     try {
-      const result = await this.octokit.graphql<{
-        repository: {
-          pullRequest: {
-            reviewThreads: {
-              nodes: Array<{
-                id: string;
-                isResolved: boolean;
-                comments: {
-                  nodes: Array<{
-                    author: { login: string } | null;
-                    body: string;
-                    path: string;
-                    line: number | null;
-                  }>;
-                };
-              }>;
-            };
-          };
-        };
-      }>(`
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviewThreads(first: 100) {
-                nodes {
-                  id
-                  isResolved
-                  comments(first: 30) {
-                    nodes {
-                      author { login }
-                      body
-                      path
-                      line
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `, { owner: this.owner, repo: this.repo, number: this.prNumber });
-
-      const threads = result.repository.pullRequest.reviewThreads.nodes;
+      const threads = await fetchReviewThreads(this.octokit, this.owner, this.repo, this.prNumber);
+      const { isOurLogin, isHuman } = makeLoginMatchers(user);
 
       // Collect our unresolved threads
-      // GraphQL returns 'github-actions', REST returns 'github-actions[bot]' — handle both
-      const botLoginVariant = user.replace('[bot]', '');
       const ourThreads: Array<{ id: string; path: string; line: number; body: string }> = [];
 
       for (const thread of threads) {
@@ -165,16 +106,13 @@ export class PRCommenter {
         if (!firstComment) continue;
 
         const isOurs = firstComment.body.includes(INLINE_COMMENT_MARKER) ||
-          firstComment.author?.login === user ||
-          firstComment.author?.login === botLoginVariant;
+          isOurLogin(firstComment.author?.login ?? '');
         if (!isOurs) continue;
 
         // A human replied after our last message — the reply handler owns this
         // thread now; never auto-resolve it out from under the conversation
         const lastComment = thread.comments.nodes[thread.comments.nodes.length - 1];
-        const lastLogin = lastComment.author?.login ?? '';
-        const lastIsHuman = lastLogin !== user && lastLogin !== botLoginVariant && !lastLogin.endsWith('[bot]');
-        if (lastIsHuman) continue;
+        if (isHuman(lastComment.author?.login ?? '')) continue;
 
         ourThreads.push({
           id: thread.id,
@@ -208,7 +146,7 @@ export class PRCommenter {
 
         const stillRelevant = currentFindings.some(
           f => f.file === thread.path &&
-               Math.abs(f.line - thread.line) <= 3,
+               Math.abs(f.line - thread.line) <= STALE_THREAD_PROXIMITY,
         );
 
         if (!stillRelevant) {
@@ -229,32 +167,12 @@ export class PRCommenter {
 
   async resolveThread(threadId: string): Promise<number> {
     try {
-      await this.octokit.graphql(`
-        mutation($threadId: ID!) {
-          resolveReviewThread(input: {threadId: $threadId}) {
-            thread { isResolved }
-          }
-        }
-      `, { threadId });
+      await resolveReviewThreadById(this.octokit, threadId);
       return 1;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       core.debug(`Failed to resolve thread: ${msg}`);
       return 0;
-    }
-  }
-
-  private formatStatus(agentStatus: AgentStatus): string {
-    switch (agentStatus.status) {
-      case 'running':
-        return '\u23F3 Running...';
-      case 'done':
-        if (agentStatus.findingCount !== undefined) {
-          return `\u2705 Done (${agentStatus.findingCount} finding${agentStatus.findingCount !== 1 ? 's' : ''})`;
-        }
-        return '\u2705 Done';
-      case 'failed':
-        return '\u274C Failed';
     }
   }
 
@@ -296,7 +214,7 @@ export class PRCommenter {
           query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
             repository(owner: $owner, name: $repo) {
               pullRequest(number: $number) {
-                comments(first: 100, after: $cursor) {
+                comments(first: ${GITHUB_PER_PAGE}, after: $cursor) {
                   nodes {
                     id
                     isMinimized
@@ -318,7 +236,7 @@ export class PRCommenter {
 
       // GraphQL author logins have no '[bot]' suffix; bots are typed as "Bot"
       // but login-based matching covers the common CI bots reliably
-      const BOT_LOGINS = /(\[bot\]$|^github-actions$|^sonarqubecloud$|^sonarcloud$|^dependabot$|^renovate$)/;
+      const BOT_LOGINS = new RegExp(`\\[bot\\]$|${KNOWN_BOT_LOGINS.source}`);
       const botComments = allComments.filter(c =>
         !c.isMinimized &&
         BOT_LOGINS.test(c.author?.login ?? '') &&
@@ -354,13 +272,7 @@ export class PRCommenter {
 
       for (const comment of toHide) {
         try {
-          await this.octokit.graphql(`
-            mutation($id: ID!) {
-              minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
-                minimizedComment { isMinimized }
-              }
-            }
-          `, { id: comment.id });
+          await minimizeCommentById(this.octokit, comment.id);
           hidden++;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -391,7 +303,7 @@ export class PRCommenter {
         owner: this.owner,
         repo: this.repo,
         issue_number: this.prNumber,
-        per_page: 100,
+        per_page: GITHUB_PER_PAGE,
       });
 
       for (const comment of comments) {
@@ -400,13 +312,7 @@ export class PRCommenter {
         if (user && comment.user?.login !== user) continue;
 
         try {
-          await this.octokit.graphql(`
-            mutation($id: ID!) {
-              minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
-                minimizedComment { isMinimized }
-              }
-            }
-          `, { id: comment.node_id });
+          await minimizeCommentById(this.octokit, comment.node_id);
           core.debug(`Minimized old summary comment ${comment.id}`);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -429,5 +335,16 @@ export class PRCommenter {
       this.authenticatedUser = 'github-actions[bot]';
       return 'github-actions[bot]';
     }
+  }
+}
+
+function formatStatus(status: AgentStatus): string {
+  switch (status) {
+    case 'running':
+      return '⏳ Running...';
+    case 'done':
+      return '✅ Done';
+    case 'failed':
+      return '❌ Failed';
   }
 }

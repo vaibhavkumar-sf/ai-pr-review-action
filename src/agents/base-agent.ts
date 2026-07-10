@@ -1,24 +1,19 @@
 import { AIProvider, ChatMessage } from '../providers/ai-provider';
 import { ActionConfig, AgentResult, Finding, ReviewCategory, ReviewContext } from '../types';
 import { extractJsonObject } from '../utils/json';
+import { addLineNumbers } from '../utils/text';
+import { loadPrompt, loadPromptOrEmpty } from '../prompts/loader';
+import { coerceFinding } from '../config/taxonomy';
+import {
+  CHARS_PER_TOKEN,
+  COMPACT_INPUT_TOKENS,
+  CONTEXT_SAFETY_MARGIN_TOKENS,
+  ERROR_SNIPPET_CHARS,
+  PROMPT_CLAMP_FLOOR_TOKENS,
+  PROMPT_MAX_FILE_CHARS,
+  PROMPT_TRIM_STAGES,
+} from '../config/limits';
 import * as core from '@actions/core';
-import * as fs from 'fs';
-import * as path from 'path';
-
-const JSON_REPAIR_INSTRUCTION =
-  'Your previous response did not contain a valid JSON object. Respond now with '
-  + 'ONLY the JSON object described in the system prompt — start with `{`, end with '
-  + '`}`, no prose before or after, and no markdown code fences. Keep descriptions '
-  + 'concise so the entire findings array fits within the response.';
-
-// Rough token estimate for budgeting — ~4 chars/token for code + English prose.
-const CHARS_PER_TOKEN = 4;
-// Thinking budget the provider adds on top of max_tokens (mirrors anthropic.provider.ts).
-const THINKING_BUDGET_TOKENS = 8192;
-// Headroom for message framing and estimator error, on top of the measured system prompt.
-const CONTEXT_SAFETY_MARGIN_TOKENS = 6000;
-// Input budget for the compact fallback used after a context-window rejection.
-const COMPACT_INPUT_TOKENS = 50000;
 
 /** Rough char→token estimate used only for prompt budgeting. */
 function estimateTokens(text: string): number {
@@ -48,8 +43,6 @@ interface PromptTrimOptions {
 export abstract class BaseAgent {
   abstract readonly name: string;
   abstract readonly category: ReviewCategory;
-  abstract readonly displayName: string;
-  abstract readonly icon: string;
 
   constructor(
     protected provider: AIProvider,
@@ -99,11 +92,11 @@ export abstract class BaseAgent {
       const parsed = this.tryParseResponse(response.content);
 
       if (!parsed) {
-        const snippet = response.content.slice(0, 300).replace(/\s+/g, ' ').trim();
+        const snippet = response.content.slice(0, ERROR_SNIPPET_CHARS).replace(/\s+/g, ' ').trim();
         core.warning(
           `Agent ${this.name}: no parseable JSON after repair retry `
           + `(stop_reason=${response.stopReason ?? 'unknown'}, `
-          + `text_len=${response.content.length}). First 300 chars: ${snippet || '(empty)'}`,
+          + `text_len=${response.content.length}). First ${ERROR_SNIPPET_CHARS} chars: ${snippet || '(empty)'}`,
         );
         return {
           agentName: this.name,
@@ -143,16 +136,6 @@ export abstract class BaseAgent {
     return this.config.maxTokens;
   }
 
-  protected buildMessages(context: ReviewContext): ChatMessage[] {
-    const systemPrompt = this.buildSystemPrompt(context);
-    const userPrompt = this.buildUserPrompt(context);
-
-    return [
-      { role: 'system' as const, content: systemPrompt },
-      { role: 'user' as const, content: userPrompt },
-    ];
-  }
-
   /**
    * Builds messages trimmed to fit the target model's context window. The prompt
    * is assembled at progressively smaller sizes (full → drop dependency files →
@@ -162,31 +145,25 @@ export abstract class BaseAgent {
    */
   protected buildBudgetedMessages(context: ReviewContext): ChatMessage[] {
     const systemPrompt = this.buildSystemPrompt(context);
-    const outputReservation = this.getMaxTokens() + THINKING_BUDGET_TOKENS;
+    // Reserve the real output budget: max_tokens plus the configured thinking
+    // budget the provider adds on top of it.
+    const outputReservation = this.getMaxTokens() + this.config.thinkingBudget;
     const inputBudget = this.config.contextWindow
       - outputReservation
       - estimateTokens(systemPrompt)
       - CONTEXT_SAFETY_MARGIN_TOKENS;
 
-    const stages: Partial<PromptTrimOptions>[] = [
-      {},
-      { maxDepFiles: 0 },
-      { maxDepFiles: 0, maxFileChars: 5000 },
-      { maxDepFiles: 0, maxFileChars: 2500 },
-      { maxDepFiles: 0, maxFileChars: 1200 },
-    ];
-
-    let userPrompt = this.buildUserPrompt(context, stages[0]);
+    let userPrompt = this.buildUserPrompt(context, PROMPT_TRIM_STAGES[0]);
     let stageUsed = 0;
-    for (let i = 0; i < stages.length; i++) {
-      userPrompt = this.buildUserPrompt(context, stages[i]);
+    for (let i = 0; i < PROMPT_TRIM_STAGES.length; i++) {
+      userPrompt = this.buildUserPrompt(context, PROMPT_TRIM_STAGES[i]);
       stageUsed = i;
       if (estimateTokens(userPrompt) <= inputBudget) break;
     }
 
     // Guaranteed backstop: clamp the assembled prompt to the char budget even if
     // a single huge diff still exceeds the smallest staged build.
-    const maxUserChars = Math.max(inputBudget, 2000) * CHARS_PER_TOKEN;
+    const maxUserChars = Math.max(inputBudget, PROMPT_CLAMP_FLOOR_TOKENS) * CHARS_PER_TOKEN;
     let clamped = false;
     if (userPrompt.length > maxUserChars) {
       userPrompt = userPrompt.substring(0, maxUserChars)
@@ -232,19 +209,19 @@ export abstract class BaseAgent {
   }
 
   protected buildSystemPrompt(context: ReviewContext): string {
-    // Load the agent's markdown prompt file
-    let prompt = this.loadPromptFile(`${this.name}.md`);
+    // Load the agent's markdown prompt file (review criteria)
+    let prompt = this.loadPromptFile(this.name);
 
     // Append framework-specific prompt if applicable
     if (context.framework === 'angular' || context.framework === 'both') {
-      const angularPrompt = this.loadPromptFile('angular-additions.md');
+      const angularPrompt = this.loadPromptFile('angular-additions');
       if (angularPrompt) prompt += '\n\n' + angularPrompt;
       if (this.config.angularPromptAppend) {
         prompt += '\n\n## Additional Angular Instructions (from user)\n' + this.config.angularPromptAppend;
       }
     }
     if (context.framework === 'loopback4' || context.framework === 'both') {
-      const lb4Prompt = this.loadPromptFile('loopback4-additions.md');
+      const lb4Prompt = this.loadPromptFile('loopback4-additions');
       if (lb4Prompt) prompt += '\n\n' + lb4Prompt;
       if (this.config.loopback4PromptAppend) {
         prompt += '\n\n## Additional LoopBack4 Instructions (from user)\n' + this.config.loopback4PromptAppend;
@@ -259,11 +236,7 @@ export abstract class BaseAgent {
     }
 
     // Global rules applied to every agent, regardless of category or prompt file
-    prompt += '\n\n## Global Review Rules (apply to ALL findings)\n';
-    prompt += '- Be exhaustive: walk your full checklist for every changed file; do not skim or stop early. When in doubt, flag the issue with severity `low` or `nit` rather than staying silent.\n';
-    prompt += '- ONE finding per distinct issue. Never collapse multiple distinct issues at the same location into one finding.\n';
-    prompt += '- DO NOT flag missing JSDoc/TSDoc/doc comments. Missing return types, missing parameter types, and loose `any` types ARE still in scope — only the doc-comment subset is suppressed. Only flag an EXISTING comment if it actively contradicts the code.\n';
-    prompt += '- DO NOT create findings located inside unit test files (`*.unit.ts`, `*.spec.ts`, `*.test.ts`, files under `__tests__/unit/`). Read them to verify coverage, but place missing-coverage findings on the production file they should cover.\n';
+    prompt += '\n\n' + loadPrompt('system/global-rules') + '\n';
 
     // Add CLAUDE.md context if available
     if (context.repoContext.claudeMdContent) {
@@ -290,7 +263,7 @@ export abstract class BaseAgent {
 
   protected buildUserPrompt(context: ReviewContext, trim?: Partial<PromptTrimOptions>): string {
     const opts: PromptTrimOptions = {
-      maxFileChars: trim?.maxFileChars ?? 10000,
+      maxFileChars: trim?.maxFileChars ?? PROMPT_MAX_FILE_CHARS,
       maxDepFiles: trim?.maxDepFiles ?? Number.POSITIVE_INFINITY,
       maxDiffChars: trim?.maxDiffChars ?? Number.POSITIVE_INFINITY,
       includeFileContents: trim?.includeFileContents ?? true,
@@ -345,67 +318,15 @@ export abstract class BaseAgent {
       }
     }
 
-    userPrompt += `\nPlease review the code changes and provide your findings in the specified JSON format.`;
-    userPrompt += `\n\nCRITICAL LINE NUMBER RULES:`;
-    userPrompt += `\n- Each file above has line numbers at the start of each line (e.g., "  26 | uses: ...")`;
-    userPrompt += `\n- You MUST use these EXACT line numbers in your findings' "line" field`;
-    userPrompt += `\n- Do NOT guess or estimate line numbers — read them from the numbered file content`;
-    userPrompt += `\n- The "line" field must match the line number shown in the file, not the diff position`;
-    userPrompt += `\n- ONLY flag issues on lines that appear as ADDED (+) lines in the diff — NOT pre-existing code`;
-    userPrompt += `\n- Do NOT flag issues in dependency files — they are provided for context only`;
-    userPrompt += `\n\nCRITICAL: ONLY FLAG LINES THAT WERE CHANGED IN THIS PR:`;
-    userPrompt += `\n- You are given both the DIFF and the full file contents. The diff shows EXACTLY which lines were added (+) or modified.`;
-    userPrompt += `\n- ONLY create findings for lines that appear as ADDED (+) lines in the diff. These are lines the PR author wrote or changed.`;
-    userPrompt += `\n- Context lines (lines with a space prefix in the diff, or lines not in any diff hunk) are PRE-EXISTING code — do NOT flag them unless the PR change directly breaks their correctness.`;
-    userPrompt += `\n- If you see an issue on a line that was NOT changed in this PR, do NOT create a finding for it. It is out of scope.`;
-    userPrompt += `\n- Before creating any finding, verify: "Is this line number inside a diff hunk as an added (+) line?" If no, skip it.`;
-    userPrompt += `\n- The full file content is provided for CONTEXT (understanding types, imports, class structure) — not for you to audit every line.`;
-    userPrompt += `\n\nIMPORT AND CONFIGURATION RULES:`;
-    userPrompt += `\n- Do NOT flag missing type-only imports that do not affect runtime behavior. If the code compiles and works without the import, it is not required.`;
-    userPrompt += `\n- Do NOT flag missing imports for types used only in decorator metadata or type positions (e.g., LoopBack4 @model() settings types).`;
-    userPrompt += `\n- Only flag a missing import if it would cause a runtime error or compilation failure.`;
-    userPrompt += `\n\nCRITICAL CODE SUGGESTION RULES:`;
-    userPrompt += `\n- The "code_suggestion" field is used in GitHub's \`\`\`suggestion\`\`\` blocks, which REPLACE the original line(s)`;
-    userPrompt += `\n- A code_suggestion REPLACES the line at the given line number. It does NOT insert before or after.`;
-    userPrompt += `\n- ONLY provide code_suggestion when you are changing the EXISTING code at that exact line`;
-    userPrompt += `\n- Do NOT provide code_suggestion for "add missing X" findings (e.g., add a checkout step, add a new function). Use the "suggestion" text field to explain what to add instead`;
-    userPrompt += `\n- Do NOT provide code_suggestion that is IDENTICAL to the original code — that is a no-op and wastes the reviewer's time`;
-    userPrompt += `\n- The code_suggestion must be a valid replacement for the line(s) at the specified line number. Read the file content to verify what is actually at that line before writing a suggestion`;
-    userPrompt += `\n- You MUST preserve the EXACT indentation (leading spaces/tabs) of the original line`;
-    userPrompt += `\n- Example: if the original line is "          debug: 'false'" (10 spaces), your suggestion must also start with 10 spaces`;
-    userPrompt += `\n- NEVER strip or change indentation — GitHub will render it as a replacement, so wrong indentation breaks the file`;
-    userPrompt += `\n- If unsure whether your code_suggestion is correct, OMIT it and use the "suggestion" text field instead`;
-    userPrompt += `\n\nCONFIGURATION & WORKFLOW FILE RULES:`;
-    userPrompt += `\n- In GitHub Actions workflow YAML files, all \`with:\` input values are STRINGS. Using quotes around 'false' or 'true' is CORRECT syntax — do NOT suggest removing quotes`;
-    userPrompt += `\n- Do NOT flag intentional configuration choices (e.g., fail_on_critical: 'false', debug: 'false', review_profile: 'standard') — these are deliberate settings chosen by the developer`;
-    userPrompt += `\n- Do NOT suggest changing config values like review_profile, fail_on_critical, or debug — the developer chose these values intentionally`;
-    userPrompt += `\n- Do NOT flag standard GitHub Actions boilerplate as issues: permissions blocks, concurrency groups, cancel-in-progress, if-guards for bot PRs, branch name filters — these are standard patterns`;
-    userPrompt += `\n- Do NOT suggest "optimization" changes to workflow files like adding \`paths:\` filters, adding checkout steps, changing trigger types, or other structural workflow improvements — these are architectural choices, not code quality issues`;
-    userPrompt += `\n- For .yml/.yaml workflow files, ONLY flag: hardcoded secrets, unpinned action versions (@main vs SHA), script injection ($\{\{ }} in run: steps), overly broad permissions (write-all)`;
-    userPrompt += `\n- For workflow files, OMIT code_suggestion entirely for most findings — workflow YAML structure is too complex for single-line replacements. Use the "suggestion" text field to explain what to do instead`;
-    userPrompt += `\n- NEVER place a code_suggestion on a line that doesn't contain the code you're fixing. If your finding is about a missing feature (e.g., "add a checkout step"), do NOT provide code_suggestion — it would replace an unrelated line`;
+    // The review contract: line-number rules, changed-lines-only scope,
+    // code-suggestion rules, workflow-file rules.
+    userPrompt += `\n` + loadPrompt('system/user-contract');
 
     return userPrompt;
   }
 
-  protected loadPromptFile(filename: string): string {
-    // Try multiple locations: /app/prompts (Docker), ./prompts (local), relative to this file
-    const locations = [
-      path.join('/app/prompts', filename),
-      path.join(process.cwd(), 'prompts', filename),
-      path.join(__dirname, '../../prompts', filename),
-    ];
-
-    for (const loc of locations) {
-      try {
-        return fs.readFileSync(loc, 'utf-8');
-      } catch {
-        continue;
-      }
-    }
-
-    core.warning(`Prompt file ${filename} not found in any location`);
-    return '';
+  protected loadPromptFile(name: string): string {
+    return loadPromptOrEmpty(name);
   }
 
   /**
@@ -427,7 +348,7 @@ export abstract class BaseAgent {
     if (brokenContent.trim()) {
       repair.push({ role: 'assistant', content: brokenContent });
     }
-    repair.push({ role: 'user', content: JSON_REPAIR_INSTRUCTION });
+    repair.push({ role: 'user', content: loadPrompt('system/json-repair') });
     return repair;
   }
 
@@ -453,19 +374,9 @@ export abstract class BaseAgent {
       return null;
     }
 
-    const validSeverities = new Set(['critical', 'high', 'medium', 'low', 'nit']);
-
-    const findings: Finding[] = (parsed.findings || []).map((f: Record<string, unknown>) => ({
-      severity: validSeverities.has(f.severity as string) ? f.severity as Finding['severity'] : 'medium',
-      category: this.resolveCategory(f.category),
-      file: f.file || '',
-      line: f.line || 0,
-      endLine: f.endLine || f.end_line,
-      title: f.title || 'Untitled finding',
-      description: f.description || '',
-      suggestion: f.suggestion,
-      codeSuggestion: f.code_suggestion || f.codeSuggestion,
-    })) as Finding[];
+    const findings = (parsed.findings || []).map(
+      (f: Record<string, unknown>) => coerceFinding(f, raw => this.resolveCategory(raw)),
+    );
 
     return {
       findings,
@@ -473,16 +384,4 @@ export abstract class BaseAgent {
       score: typeof parsed.score === 'number' ? parsed.score : 5,
     };
   }
-}
-
-/**
- * Prepends line numbers to each line of content (1-indexed, right-aligned).
- * Example output: "   1 | const x = 1;\n   2 | const y = 2;"
- */
-function addLineNumbers(content: string): string {
-  const lines = content.split('\n');
-  const padding = String(lines.length).length;
-  return lines
-    .map((line, i) => `${String(i + 1).padStart(padding)} | ${line}`)
-    .join('\n');
 }

@@ -1,4 +1,6 @@
 import { ReviewContext } from '../types';
+import { extractRelativeImports, resolveRelativeImport } from '../utils/imports';
+import { ARCH_DIAGRAM_MAX_FILES } from '../config/limits';
 
 /**
  * Generates a Mermaid flowchart showing changed files and their import relationships.
@@ -17,7 +19,7 @@ export function generateArchitectureDiagram(context: ReviewContext): string {
   }
 
   // Limit diagram size for readability
-  const filesToDiagram = changedFiles.slice(0, 20);
+  const filesToDiagram = changedFiles.slice(0, ARCH_DIAGRAM_MAX_FILES);
 
   // Build a map of filename -> sanitized node ID
   const nodeIds = new Map<string, string>();
@@ -32,10 +34,11 @@ export function generateArchitectureDiagram(context: ReviewContext): string {
   for (const file of filesToDiagram) {
     if (!file.content) continue;
 
-    const imports = extractImports(file.content);
+    const imports = extractRelativeImports(file.content);
     for (const imp of imports) {
       // Resolve relative imports against the file's directory
-      const resolved = resolveImportPath(file.filename, imp);
+      const resolved = resolveRelativeImport(file.filename, imp);
+      if (!resolved) continue;
       // Check if the resolved import matches any changed file
       const matchedFile = findMatchingFile(resolved, filesToDiagram.map(f => f.filename));
       if (matchedFile && matchedFile !== file.filename) {
@@ -80,49 +83,6 @@ export function generateArchitectureDiagram(context: ReviewContext): string {
   }
 
   return lines.join('\n');
-}
-
-/**
- * Extracts import paths from TypeScript/JavaScript source content.
- */
-function extractImports(content: string): string[] {
-  const imports: string[] = [];
-
-  // Match ES module imports: import ... from '...'
-  const esImportRegex = /import\s+(?:[\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g;
-  let match;
-  while ((match = esImportRegex.exec(content)) !== null) {
-    imports.push(match[1]);
-  }
-
-  // Match require() calls: require('...')
-  const requireRegex = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-  while ((match = requireRegex.exec(content)) !== null) {
-    imports.push(match[1]);
-  }
-
-  // Only keep relative imports (start with . or ..)
-  return imports.filter(i => i.startsWith('.'));
-}
-
-/**
- * Resolves a relative import path against the importing file's directory.
- */
-function resolveImportPath(fromFile: string, importPath: string): string {
-  const dir = fromFile.substring(0, fromFile.lastIndexOf('/'));
-  const parts = (dir + '/' + importPath).split('/');
-  const resolved: string[] = [];
-
-  for (const part of parts) {
-    if (part === '.' || part === '') continue;
-    if (part === '..') {
-      resolved.pop();
-    } else {
-      resolved.push(part);
-    }
-  }
-
-  return resolved.join('/');
 }
 
 /**

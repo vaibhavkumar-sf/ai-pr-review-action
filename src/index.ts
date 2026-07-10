@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
-import { parseActionInputs } from './config/action-inputs';
-import { runReview } from './orchestrator';
+import { parseActionInputs } from './config/inputs';
+import { runReview } from './pipeline/orchestrator';
 import { setDebug } from './utils/logger';
 
 async function run(): Promise<void> {
@@ -8,9 +8,8 @@ async function run(): Promise<void> {
     const config = parseActionInputs();
     setDebug(config.debug);
 
-    core.info(`AI PR Review Action starting...`);
-    core.info(`Profile: ${config.reviewProfile} | Model: ${config.anthropicModel}`);
-    core.info(`Enabled agents: ${Array.from(config.enabledAgents).join(', ')}`);
+    core.info('AI PR Review Action starting...');
+    core.info(`Mode: ${config.reviewMode} | Provider: ${config.aiProvider} | Model: ${config.anthropicModel}`);
 
     await runReview(config);
   } catch (error) {
