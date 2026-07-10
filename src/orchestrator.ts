@@ -7,6 +7,7 @@ import { createAIProvider } from './providers/provider-factory';
 import { createAgents } from './agents';
 import { PRCommenter } from './github/pr-commenter';
 import { InlineReviewer } from './github/inline-reviewer';
+import { ReplyHandler } from './github/reply-handler';
 import { parseDiff } from './github/diff-parser';
 import { deduplicateFindings, consolidateFindings, mergeResults, formatReviewComment, generateArchitectureDiagram } from './results';
 import { generateDiagramImages, validateMermaid } from './results/image-diagram-generator';
@@ -37,6 +38,13 @@ export async function runReview(config: ActionConfig): Promise<void> {
     '## \u23F3 AI Code Review\n\nReview starting... gathering context.',
   );
   logger.info('Posted initial progress comment');
+
+  // 2b. Hide noisy recurring bot comments (own summaries handled separately)
+  let botCommentsHidden = 0;
+  if (config.enableBotCommentCleanup) {
+    botCommentsHidden = await commenter.cleanupBotComments();
+  }
+  core.setOutput('bot_comments_hidden', botCommentsHidden);
 
   // 3. Gather all context
   let context: ReviewContext;
@@ -180,7 +188,24 @@ export async function runReview(config: ActionConfig): Promise<void> {
   core.setOutput('review_comment_id', commentId);
   core.setOutput('review_comment_url', commentUrl);
 
-  // 10. Resolve stale inline comments from previous runs, then post new ones
+  // 10. Handle human replies on previous threads, resolve stale inline
+  // comments from previous runs, then post new ones
+  let repliesPosted = 0;
+  let threadsResolvedFromReplies = 0;
+  if (config.enableReplyHandling) {
+    try {
+      const replyHandler = new ReplyHandler(octokit, commenter, provider, config);
+      const replyResult = await replyHandler.processReplies(context);
+      repliesPosted = replyResult.repliesPosted;
+      threadsResolvedFromReplies = replyResult.threadsResolved;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      core.warning(`Reply handling failed: ${msg}`);
+    }
+  }
+  core.setOutput('replies_posted', repliesPosted);
+  core.setOutput('threads_resolved_from_replies', threadsResolvedFromReplies);
+
   if (config.postInlineComments) {
     // Resolve old inline comments that are no longer relevant
     const currentFindingSummary = consolidated.map(f => ({

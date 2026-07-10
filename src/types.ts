@@ -109,6 +109,8 @@ export interface ActionConfig {
   failThreshold: FailThreshold;
   postInlineComments: boolean;
   postDataUrl: string;
+  enableReplyHandling: boolean;
+  enableBotCommentCleanup: boolean;
   maxFilesToReview: number;
   excludePatterns: string[];
   includePatterns: string[];

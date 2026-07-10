@@ -60,8 +60,9 @@ src/
     jira-context.ts     ← Optional JIRA ticket extraction (fault-tolerant)
     repo-context.ts     ← Framework detection + CLAUDE.md reader
   github/
-    pr-commenter.ts     ← Fixed comment with progress, minimize old, resolve stale
+    pr-commenter.ts     ← Fixed comment with progress, minimize old + noisy bot comments, resolve stale
     inline-reviewer.ts  ← Post inline review comments via GitHub Review API
+    reply-handler.ts    ← Verify human replies vs code, post justification, resolve valid ones
     diff-parser.ts      ← Parse unified diff, map line numbers to diff positions
   providers/
     ai-provider.ts      ← Interface: chat(messages, options) → response
@@ -101,14 +102,15 @@ Agents also live in `src/agents/comprehensive.agent.ts` (combined mode): it over
 
 ### Review Flow (orchestrator.ts)
 1. Post initial progress comment
-2. Gather context (PR + JIRA + repo) in parallel
-3. Create AI provider + agents (combined mode: single ComprehensiveAgent; separate mode: filter by profile)
-4. Launch all agents in parallel (`Promise.allSettled`)
-5. Programmatic dedup → AI consolidation pass (separate mode only — skipped in combined mode) → merge
-6. Post final summary comment (replaces progress)
-7. Resolve stale inline threads → post new inline comments (critical/high/medium, never on test files)
-8. Append AI description with Mermaid diagram to PR body
-9. Set action outputs → report to Backstage if `post_data_url` set → optionally fail
+2. Clean up noisy bot comments (`cleanupBotComments`: hide-all patterns + keep-latest per recurring type)
+3. Gather context (PR + JIRA + repo) in parallel
+4. Create AI provider + agents (combined mode: single ComprehensiveAgent; separate mode: filter by profile)
+5. Launch all agents in parallel (`Promise.allSettled`)
+6. Programmatic dedup → AI consolidation pass (separate mode only — skipped in combined mode) → merge
+7. Post final summary comment (replaces progress)
+8. Handle human replies (`ReplyHandler`: AI verdict vs current code → justification reply in every awaiting thread → resolve if valid) → resolve stale inline threads (skips threads with unanswered human replies) → post new inline comments (critical/high/medium, never on test files)
+9. Append AI description with Mermaid diagram to PR body
+10. Set action outputs → report to Backstage if `post_data_url` set → optionally fail
 
 ### Comments Strategy
 - **Summary comment:** One fixed comment per run, old ones minimized (not deleted) via GraphQL `minimizeComment(classifier: OUTDATED)`

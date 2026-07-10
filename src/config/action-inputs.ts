@@ -145,6 +145,8 @@ export function parseActionInputs(): ActionConfig {
     failThreshold: parseFailThreshold(getInputOrDefault('fail_threshold', defaults.failThreshold)),
     postInlineComments: getBooleanInput('post_inline_comments', defaults.postInlineComments),
     postDataUrl: core.getInput('post_data_url'),
+    enableReplyHandling: getBooleanInput('enable_reply_handling', defaults.enableReplyHandling),
+    enableBotCommentCleanup: getBooleanInput('enable_bot_comment_cleanup', defaults.enableBotCommentCleanup),
     maxFilesToReview: getNumberInput('max_files_to_review', defaults.maxFilesToReview),
     excludePatterns,
     includePatterns: parseCommaSeparated(core.getInput('include_patterns')),

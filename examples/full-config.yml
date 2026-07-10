@@ -61,6 +61,10 @@ jobs:
           post_inline_comments: 'true'
           # Backstage tracker endpoint (optional) — see docs/backstage-integration.md
           post_data_url: ${{ secrets.AI_REVIEW_POST_DATA_URL }}
+          # Verify human replies on review threads, reply with justification, resolve valid ones
+          enable_reply_handling: 'true'
+          # Collapse noisy recurring bot comments (keep latest of each type)
+          enable_bot_comment_cleanup: 'true'
           max_files_to_review: '50'
           exclude_patterns: '**/package-lock.json,**/yarn.lock,**/*.bpmn,**/openapi.json,**/dist/**'
 

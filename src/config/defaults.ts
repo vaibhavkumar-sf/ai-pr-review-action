@@ -35,6 +35,14 @@ export const DEFAULT_EXCLUDE_PATTERNS = [
   '**/*.d.ts',
 ];
 
+// Bot comments whose body matches one of these phrases are ALWAYS hidden
+// (every occurrence). All other recurring bot comment types keep only the
+// latest occurrence per (bot, heading) — older ones are minimized as OUTDATED.
+export const BOT_HIDE_ALL_PATTERNS = [
+  'Unit Test Quality Report',
+  'Unit Test Quality Analysis Failed',
+];
+
 // Findings in these files are kept in the summary but never posted as inline comments
 export const TEST_FILE_PATTERNS: RegExp[] = [
   /\.unit\.[tj]s$/,
@@ -78,6 +86,8 @@ export function buildDefaultConfig(): ActionConfig {
     failThreshold: DEFAULT_FAIL_THRESHOLD,
     postInlineComments: true,
     postDataUrl: '',
+    enableReplyHandling: true,
+    enableBotCommentCleanup: true,
     maxFilesToReview: DEFAULT_MAX_FILES,
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS],
     includePatterns: [],

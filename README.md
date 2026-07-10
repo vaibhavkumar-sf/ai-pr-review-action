@@ -125,6 +125,19 @@ fail_on_critical: 'true'        # Fail PR on critical findings
 fail_threshold: 'high'          # Fail on high or critical findings
 ```
 
+## Automated Comment Lifecycle
+
+The action manages the whole comment lifecycle on a PR, so commenting, collapsing, resolving, and replying are automated:
+
+| Behavior | How |
+|----------|-----|
+| One live summary | Previous AI review summary comments are minimized as OUTDATED — only the latest stays visible |
+| Noisy bot comments collapsed | `enable_bot_comment_cleanup` (default on): known noise (e.g. Unit Test Quality reports) is hidden entirely; any other recurring bot comment type (SonarQube etc.) keeps only the latest occurrence |
+| Outdated findings auto-resolved | On every run, its own inline threads are resolved when the issue no longer exists in the re-reviewed code (and duplicate threads at one location collapse to the latest) |
+| Human replies answered | `enable_reply_handling` (default on): when someone replies to a review comment, the AI verifies the claim against the current code and posts a justification reply in EVERY such thread — agreeing and **resolving the thread** if the person is right (or the issue is fixed), or explaining exactly why the issue still stands |
+
+Safety rules: only its own threads are ever resolved/minimized (never other reviewers'), threads with an unanswered human reply are never silently auto-resolved, and each thread gets at most one AI response per human message (no reply loops). Replies are processed on each review run (i.e. on every push to the PR).
+
 ## Backstage Reporting (Optional)
 
 Set `post_data_url` to POST the full review result — aggregate metrics plus every individual finding with its category and severity — to a Backstage tracker endpoint after each run:
