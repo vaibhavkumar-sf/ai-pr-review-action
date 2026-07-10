@@ -28,6 +28,10 @@ inputs:
     description: 'Maximum tokens per AI response'
     required: false
     default: '8192'
+  context_window:
+    description: "Total context window of the target model, in tokens. The prompt is trimmed to fit within this minus reserved output, avoiding model_context_window_exceeded. Default 200000 (GLM-4.6 / most compatible endpoints); set 1000000 for real Claude Opus 4.8"
+    required: false
+    default: '200000'
   temperature:
     description: 'AI temperature (0.0 - 1.0)'
     required: false
@@ -232,6 +236,7 @@ runs:
     INPUT_ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
     INPUT_ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
     INPUT_MAX_TOKENS: ${{ inputs.max_tokens }}
+    INPUT_CONTEXT_WINDOW: ${{ inputs.context_window }}
     INPUT_TEMPERATURE: ${{ inputs.temperature }}
     INPUT_REVIEW_MODE: ${{ inputs.review_mode }}
     INPUT_REVIEW_PROFILE: ${{ inputs.review_profile }}

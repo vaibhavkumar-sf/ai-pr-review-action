@@ -11,6 +11,40 @@ const JSON_REPAIR_INSTRUCTION =
   + '`}`, no prose before or after, and no markdown code fences. Keep descriptions '
   + 'concise so the entire findings array fits within the response.';
 
+// Rough token estimate for budgeting — ~4 chars/token for code + English prose.
+const CHARS_PER_TOKEN = 4;
+// Thinking budget the provider adds on top of max_tokens (mirrors anthropic.provider.ts).
+const THINKING_BUDGET_TOKENS = 8192;
+// Headroom for message framing and estimator error, on top of the measured system prompt.
+const CONTEXT_SAFETY_MARGIN_TOKENS = 6000;
+// Input budget for the compact fallback used after a context-window rejection.
+const COMPACT_INPUT_TOKENS = 50000;
+
+/** Rough char→token estimate used only for prompt budgeting. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+/**
+ * True when a stop_reason indicates the request overflowed the model's context
+ * window (e.g. GLM's `model_context_window_exceeded`). Deliberately does NOT
+ * match a plain `max_tokens` stop (that means the OUTPUT was truncated, which is
+ * handled by the JSON-repair path instead).
+ */
+function isContextOverflow(stopReason?: string | null): boolean {
+  if (!stopReason) return false;
+  const s = stopReason.toLowerCase();
+  return s.includes('context_window') || s.includes('context_length')
+    || s.includes('prompt_too_long') || s.includes('too_long') || s.includes('context_exceeded');
+}
+
+interface PromptTrimOptions {
+  maxFileChars: number;
+  maxDepFiles: number;
+  maxDiffChars: number;
+  includeFileContents: boolean;
+}
+
 export abstract class BaseAgent {
   abstract readonly name: string;
   abstract readonly category: ReviewCategory;
@@ -25,22 +59,32 @@ export abstract class BaseAgent {
   async review(context: ReviewContext): Promise<AgentResult> {
     const startTime = Date.now();
     try {
-      const messages = this.buildMessages(context);
       const maxTokens = this.getMaxTokens();
-      let response = await this.provider.chat(messages, {
+      const chatOpts = {
         maxTokens,
         temperature: this.config.temperature,
         timeout: this.config.agentTimeout * 1000,
-      });
+      };
 
-      let parsed = this.tryParseResponse(response.content);
+      // Pre-flight: trim the prompt to fit the model's context window so the
+      // request is not rejected with model_context_window_exceeded.
+      const messages = this.buildBudgetedMessages(context);
+      let response = await this.provider.chat(messages, chatOpts);
 
-      // Auto-heal: the first response had no parseable JSON (the model returned
-      // prose, wrapped/trailing text, or truncated JSON). Feed the broken output
-      // back and ask once more for a clean JSON-only object. Extended thinking
-      // stays enabled — its budget is allocated on top of maxTokens, so it never
-      // starves the text output.
-      if (!parsed) {
+      // Auto-heal, branched by failure mode:
+      if (isContextOverflow(response.stopReason)) {
+        // The trimmed prompt still overflowed (the real window is smaller than
+        // configured, or the estimate was optimistic). Retry with an aggressively
+        // compact prompt — diff-only, no file bodies, no dependency files.
+        core.warning(
+          `Agent ${this.name}: context window exceeded `
+          + `(stop_reason=${response.stopReason}); retrying with a compact diff-only prompt`,
+        );
+        response = await this.provider.chat(this.buildCompactMessages(context), chatOpts);
+      } else if (!this.tryParseResponse(response.content)) {
+        // Response had no parseable JSON (prose, wrapped/trailing text, or truncated
+        // JSON). Feed the broken output back and ask once more for JSON only.
+        // Extended thinking stays enabled — its budget is on top of maxTokens.
         core.warning(
           `Agent ${this.name}: first response had no parseable JSON `
           + `(stop_reason=${response.stopReason ?? 'unknown'}, `
@@ -48,14 +92,11 @@ export abstract class BaseAgent {
         );
         response = await this.provider.chat(
           this.buildRepairMessages(messages, response.content),
-          {
-            maxTokens,
-            temperature: this.config.temperature,
-            timeout: this.config.agentTimeout * 1000,
-          },
+          chatOpts,
         );
-        parsed = this.tryParseResponse(response.content);
       }
+
+      const parsed = this.tryParseResponse(response.content);
 
       if (!parsed) {
         const snippet = response.content.slice(0, 300).replace(/\s+/g, ' ').trim();
@@ -106,6 +147,84 @@ export abstract class BaseAgent {
     const systemPrompt = this.buildSystemPrompt(context);
     const userPrompt = this.buildUserPrompt(context);
 
+    return [
+      { role: 'system' as const, content: systemPrompt },
+      { role: 'user' as const, content: userPrompt },
+    ];
+  }
+
+  /**
+   * Builds messages trimmed to fit the target model's context window. The prompt
+   * is assembled at progressively smaller sizes (full → drop dependency files →
+   * shrink per-file content) until the estimated input tokens fit within
+   * `contextWindow - reserved output - system prompt - safety margin`, with a
+   * final hard clamp as a guaranteed backstop.
+   */
+  protected buildBudgetedMessages(context: ReviewContext): ChatMessage[] {
+    const systemPrompt = this.buildSystemPrompt(context);
+    const outputReservation = this.getMaxTokens() + THINKING_BUDGET_TOKENS;
+    const inputBudget = this.config.contextWindow
+      - outputReservation
+      - estimateTokens(systemPrompt)
+      - CONTEXT_SAFETY_MARGIN_TOKENS;
+
+    const stages: Partial<PromptTrimOptions>[] = [
+      {},
+      { maxDepFiles: 0 },
+      { maxDepFiles: 0, maxFileChars: 5000 },
+      { maxDepFiles: 0, maxFileChars: 2500 },
+      { maxDepFiles: 0, maxFileChars: 1200 },
+    ];
+
+    let userPrompt = this.buildUserPrompt(context, stages[0]);
+    let stageUsed = 0;
+    for (let i = 0; i < stages.length; i++) {
+      userPrompt = this.buildUserPrompt(context, stages[i]);
+      stageUsed = i;
+      if (estimateTokens(userPrompt) <= inputBudget) break;
+    }
+
+    // Guaranteed backstop: clamp the assembled prompt to the char budget even if
+    // a single huge diff still exceeds the smallest staged build.
+    const maxUserChars = Math.max(inputBudget, 2000) * CHARS_PER_TOKEN;
+    let clamped = false;
+    if (userPrompt.length > maxUserChars) {
+      userPrompt = userPrompt.substring(0, maxUserChars)
+        + '\n\n... (prompt truncated to fit the model context window)';
+      clamped = true;
+    }
+
+    if (stageUsed > 0 || clamped) {
+      core.warning(
+        `Agent ${this.name}: prompt trimmed to fit context window `
+        + `(${this.config.contextWindow} tok): input≈${estimateTokens(userPrompt)} tok, `
+        + `budget≈${inputBudget} tok, trim stage ${stageUsed}${clamped ? ' + hard clamp' : ''}. `
+        + 'Increase context_window for a larger-context model, or split the PR.',
+      );
+    }
+
+    return [
+      { role: 'system' as const, content: systemPrompt },
+      { role: 'user' as const, content: userPrompt },
+    ];
+  }
+
+  /**
+   * Minimal prompt for the fallback retry after a context-window rejection:
+   * the diff only (capped), no full file bodies, no dependency files.
+   */
+  protected buildCompactMessages(context: ReviewContext): ChatMessage[] {
+    const systemPrompt = this.buildSystemPrompt(context);
+    const budgetChars = COMPACT_INPUT_TOKENS * CHARS_PER_TOKEN;
+    let userPrompt = this.buildUserPrompt(context, {
+      includeFileContents: false,
+      maxDepFiles: 0,
+      maxDiffChars: budgetChars,
+    });
+    if (userPrompt.length > budgetChars) {
+      userPrompt = userPrompt.substring(0, budgetChars)
+        + '\n\n... (prompt truncated to fit the model context window)';
+    }
     return [
       { role: 'system' as const, content: systemPrompt },
       { role: 'user' as const, content: userPrompt },
@@ -169,7 +288,14 @@ export abstract class BaseAgent {
     return prompt;
   }
 
-  protected buildUserPrompt(context: ReviewContext): string {
+  protected buildUserPrompt(context: ReviewContext, trim?: Partial<PromptTrimOptions>): string {
+    const opts: PromptTrimOptions = {
+      maxFileChars: trim?.maxFileChars ?? 10000,
+      maxDepFiles: trim?.maxDepFiles ?? Number.POSITIVE_INFINITY,
+      maxDiffChars: trim?.maxDiffChars ?? Number.POSITIVE_INFINITY,
+      includeFileContents: trim?.includeFileContents ?? true,
+    };
+
     let userPrompt = `## Pull Request Information\n`;
     userPrompt += `- **Title:** ${context.prTitle}\n`;
     userPrompt += `- **Author:** ${context.prAuthor}\n`;
@@ -181,17 +307,22 @@ export abstract class BaseAgent {
       userPrompt += `## PR Description\n${context.prBody}\n\n`;
     }
 
-    userPrompt += `## Diff\n\`\`\`diff\n${context.diff}\n\`\`\`\n\n`;
+    const diff = context.diff.length > opts.maxDiffChars
+      ? context.diff.substring(0, opts.maxDiffChars) + '\n... (diff truncated to fit context window)'
+      : context.diff;
+    userPrompt += `## Diff\n\`\`\`diff\n${diff}\n\`\`\`\n\n`;
 
     // Include full file contents WITH LINE NUMBERS for accurate line references
-    const filesToInclude = context.changedFiles.filter(f => f.content && f.status !== 'removed');
+    const filesToInclude = opts.includeFileContents
+      ? context.changedFiles.filter(f => f.content && f.status !== 'removed')
+      : [];
     if (filesToInclude.length > 0) {
       userPrompt += `## Full File Contents (with line numbers)\n\n`;
       userPrompt += `> Line numbers are shown at the start of each line. Use these EXACT line numbers in your findings.\n\n`;
       for (const file of filesToInclude) {
         const content = file.content || '';
-        const truncated = content.length > 10000
-          ? content.substring(0, 10000) + '\n... (truncated)'
+        const truncated = content.length > opts.maxFileChars
+          ? content.substring(0, opts.maxFileChars) + '\n... (truncated)'
           : content;
         const numbered = addLineNumbers(truncated);
         userPrompt += `### ${file.filename}\n\`\`\`\n${numbered}\n\`\`\`\n\n`;
@@ -199,12 +330,15 @@ export abstract class BaseAgent {
     }
 
     // Include dependency files (imported by changed files, not changed themselves)
-    if (context.dependencyFiles && context.dependencyFiles.length > 0) {
+    const depFiles = context.dependencyFiles
+      ? context.dependencyFiles.slice(0, opts.maxDepFiles)
+      : [];
+    if (depFiles.length > 0) {
       userPrompt += `## Referenced Dependency Files (not changed, for context only)\n\n`;
       userPrompt += `> These files are imported by the changed files. Review them for context `;
       userPrompt += `(e.g., interfaces, models, types) but do NOT flag issues in these files — `;
       userPrompt += `only flag issues in the changed files shown in the diff above.\n\n`;
-      for (const dep of context.dependencyFiles) {
+      for (const dep of depFiles) {
         userPrompt += `### ${dep.filename}\n`;
         userPrompt += `*Referenced by: ${dep.referencedBy.join(', ')}*\n`;
         userPrompt += `\`\`\`\n${addLineNumbers(dep.content)}\n\`\`\`\n\n`;
