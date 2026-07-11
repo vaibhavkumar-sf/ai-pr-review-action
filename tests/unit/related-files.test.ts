@@ -120,6 +120,19 @@ describe('resolveInjectKey', () => {
     expect(resolveInjectKey('custom.SomethingElse', tree)).toBeNull();
     expect(resolveInjectKey('nodots', tree)).toBeNull();
   });
+
+  it('prefers the match sharing the longest path prefix with the referencing file', () => {
+    const monoTree = makeTree([
+      'services/analytics-service/src/datasources/pgdb.datasource.ts',
+      'services/project-management-service/src/datasources/pgdb.datasource.ts',
+    ]);
+    expect(
+      resolveInjectKey('datasources.pgdb', monoTree, 'services/project-management-service/src/controllers/board.controller.ts'),
+    ).toBe('services/project-management-service/src/datasources/pgdb.datasource.ts');
+    expect(
+      resolveInjectKey('datasources.pgdb', monoTree, 'services/analytics-service/src/services/report.service.ts'),
+    ).toBe('services/analytics-service/src/datasources/pgdb.datasource.ts');
+  });
 });
 
 describe('pascalToKebab', () => {

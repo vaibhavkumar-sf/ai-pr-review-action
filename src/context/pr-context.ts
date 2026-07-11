@@ -250,7 +250,6 @@ async function gatherRelatedFiles(
 
   // ── Collect candidates ──
   const candidates = new Map<string, RelatedCandidate>();
-  const symbolsByPath = new Map<string, Set<string>>();
 
   const addCandidate = (path: string, referencedBy: Iterable<string>, reason: DependencyReason) => {
     if (changedPaths.has(path) || isExcluded(path)) return;
@@ -263,7 +262,10 @@ async function gatherRelatedFiles(
     }
   };
 
-  // 1. Resolved imports of every changed source file.
+  // 1. Resolved imports of every changed source file. Imports that land on a
+  //    barrel (index.ts) are expanded to the files defining the imported
+  //    symbols BEFORE ranking, so real definitions compete for budget slots
+  //    instead of one-line re-export lists.
   for (const file of changedFiles) {
     if (!file.content || file.status === 'removed') continue;
     if (!/\.[tj]sx?$/.test(file.filename)) continue;
@@ -280,10 +282,20 @@ async function gatherRelatedFiles(
       }
       if (!resolved || changedPaths.has(resolved)) continue;
 
+      if (/(^|\/)index\.[tj]s$/.test(resolved) && imp.symbols.length > 0) {
+        const barrelContent = await fetchText(resolved);
+        const targets = barrelContent
+          ? resolveBarrelTargets(resolved, barrelContent, imp.symbols, tree).filter(
+              (t) => !changedPaths.has(t),
+            )
+          : [];
+        if (targets.length > 0) {
+          for (const target of targets) addCandidate(target, [file.filename], 'barrel-reexport');
+          continue; // definitions replace the barrel itself
+        }
+      }
+
       addCandidate(resolved, [file.filename], 'imported');
-      const symbols = symbolsByPath.get(resolved) ?? new Set<string>();
-      for (const symbol of imp.symbols) symbols.add(symbol);
-      symbolsByPath.set(resolved, symbols);
     }
   }
 
@@ -332,35 +344,7 @@ async function gatherRelatedFiles(
       };
     }),
   );
-  let results: DependencyFile[] = fetched.filter((f): f is DependencyFile => f !== null);
-
-  // ── Barrel pass: swap fetched index.ts barrels for the files that actually
-  //    define the imported symbols. ──
-  const barrelReplacements: DependencyFile[] = [];
-  const dropBarrels = new Set<string>();
-  for (const dep of results) {
-    if (!/(^|\/)index\.[tj]s$/.test(dep.filename) || dep.reason !== 'imported') continue;
-    const symbols = Array.from(symbolsByPath.get(dep.filename) ?? []);
-    const targets = resolveBarrelTargets(dep.filename, dep.content, symbols, tree)
-      .filter((t) => !changedPaths.has(t) && !candidates.has(t) && !isExcluded(t) && sizeOf(t) <= RELATED_FILE_MAX_BYTES);
-    if (targets.length === 0) continue;
-
-    for (const target of targets) {
-      if (results.length + barrelReplacements.length - dropBarrels.size >= RELATED_FILES_MAX) break;
-      const content = await fetchText(target);
-      if (content === null) continue;
-      barrelReplacements.push({
-        filename: target,
-        content: truncate(content),
-        referencedBy: dep.referencedBy,
-        reason: 'barrel-reexport',
-      });
-    }
-    if (barrelReplacements.length > 0) dropBarrels.add(dep.filename);
-  }
-  if (barrelReplacements.length > 0) {
-    results = results.filter((dep) => !dropBarrels.has(dep.filename)).concat(barrelReplacements);
-  }
+  const results: DependencyFile[] = fetched.filter((f): f is DependencyFile => f !== null);
 
   if (results.length > 0) {
     const reasonCounts = new Map<string, number>();

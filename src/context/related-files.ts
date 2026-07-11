@@ -65,7 +65,7 @@ export function collectFrameworkCandidates(
     if (framework === 'loopback4' || framework === 'both') {
       // String-key DI: @inject('datasources.pgdb'), @inject('services.FooService'), …
       for (const injectMatch of file.content.matchAll(/@inject(?:\.getter)?\s*\(\s*['"]([^'"]+)['"]/g)) {
-        add(resolveInjectKey(injectMatch[1], tree), file.filename, 'di-binding');
+        add(resolveInjectKey(injectMatch[1], tree, file.filename), file.filename, 'di-binding');
       }
     }
   }
@@ -80,8 +80,10 @@ export function collectFrameworkCandidates(
  * - 'services.UserHelperService' → **&#47;services/user-helper.service.ts
  * - 'repositories.TaskRepository' → **&#47;repositories/task.repository.ts
  * - 'adapters.FooAdapter'       → **&#47;adapters/foo.adapter.ts
+ * When several packages define the same name (monorepo), the match sharing
+ * the longest path prefix with the referencing file wins.
  */
-export function resolveInjectKey(key: string, tree: RepoTree): string | null {
+export function resolveInjectKey(key: string, tree: RepoTree, fromFile = ''): string | null {
   const dot = key.indexOf('.');
   if (dot === -1) return null;
   const namespace = key.substring(0, dot);
@@ -107,9 +109,23 @@ export function resolveInjectKey(key: string, tree: RepoTree): string | null {
 
   for (const { dirSuffix, fileName } of lookups) {
     const matches = tree.findByDirSuffixAndName(dirSuffix, fileName);
-    if (matches.length > 0) return matches[0];
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      return matches
+        .map((m) => ({ m, shared: sharedPrefixLength(m, fromFile) }))
+        .sort((a, b) => b.shared - a.shared || a.m.localeCompare(b.m))[0].m;
+    }
   }
   return null;
+}
+
+/** Number of leading path segments two repo paths share. */
+function sharedPrefixLength(a: string, b: string): number {
+  const partsA = a.split('/');
+  const partsB = b.split('/');
+  let shared = 0;
+  while (shared < partsA.length && shared < partsB.length && partsA[shared] === partsB[shared]) shared++;
+  return shared;
 }
 
 /** UserResourceHelperService → user-resource-helper-service (per-word kebab). */

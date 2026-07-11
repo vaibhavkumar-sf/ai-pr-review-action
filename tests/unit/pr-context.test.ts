@@ -114,10 +114,27 @@ describe('gatherPRContext related-context', () => {
 
     expect(byPath['src/app/home/helper.ts']?.reason).toBe('imported');
     expect(byPath['src/app/core/api/api.service.ts']?.reason).toBe('imported');
-    expect(byPath['packages/core-lib/src/index.ts']?.reason).toBe('imported');
     expect(byPath['src/app/home/home.component.html']?.reason).toBe('template');
     expect(byPath['src/app/home/home.module.ts']?.reason).toBe('declaring-module');
     expect(byPath['src/app/home/helper.ts']?.referencedBy).toContain('src/app/home/home.component.ts');
+  });
+
+  it('expands barrel imports into the defining files before ranking', async () => {
+    setRepo({
+      changed: [{ filename: 'src/a.ts' }],
+      files: {
+        'src/a.ts': `import { UserModel } from './models';`,
+        'src/models/index.ts': `export { UserModel } from './user.model';\nexport { OtherModel } from './other.model';`,
+        'src/models/user.model.ts': 'export class UserModel {}',
+        'src/models/other.model.ts': 'export class OtherModel {}',
+      },
+    });
+
+    const context = await gatherPRContext(makeConfig());
+    const byPath = Object.fromEntries(context.dependencyFiles.map((d) => [d.filename, d]));
+    expect(byPath['src/models/user.model.ts']?.reason).toBe('barrel-reexport');
+    expect(byPath['src/models/index.ts']).toBeUndefined(); // definitions replace the barrel
+    expect(byPath['src/models/other.model.ts']).toBeUndefined(); // symbol not imported
   });
 
   it('makes zero tree/content calls beyond changed files when related_context is off', async () => {
