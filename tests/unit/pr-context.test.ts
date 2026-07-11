@@ -185,6 +185,24 @@ describe('gatherPRContext related-context', () => {
     expect(paths).not.toContain('src/c.ts');
   });
 
+  it('selects fairly across changed files — a high-fan-out file cannot crowd out another file\'s only dependency', async () => {
+    // hub.ts imports 30 small model files (top-ranked globally); lone.ts
+    // imports a single larger service. Fair selection must include it.
+    const files: Record<string, string> = {
+      'src/hub.ts': Array.from({ length: 30 }, (_, i) => `import { M${i} } from './m/m${i}.model';`).join('\n'),
+      'src/lone.ts': `import { LoneService } from './lone.service';`,
+      'src/lone.service.ts': 'export class LoneService { ' + 'x'.repeat(500) + ' }',
+    };
+    for (let i = 0; i < 30; i++) files[`src/m/m${i}.model.ts`] = `export class M${i} {}`;
+
+    setRepo({ changed: [{ filename: 'src/hub.ts' }, { filename: 'src/lone.ts' }], files });
+
+    const context = await gatherPRContext(makeConfig());
+    const paths = context.dependencyFiles.map((d) => d.filename);
+    expect(paths).toContain('src/lone.service.ts');
+    expect(paths.length).toBeLessThanOrEqual(24); // RELATED_FILES_MAX
+  });
+
   it('excludes related files matching exclude patterns', async () => {
     setRepo({
       changed: [{ filename: 'src/a.ts' }],

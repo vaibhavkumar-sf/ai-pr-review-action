@@ -316,15 +316,49 @@ async function gatherRelatedFiles(
   const eligible = [...candidates.values()].filter((c) => sizeOf(c.path) <= RELATED_FILE_MAX_BYTES);
   const ranked = rankCandidates(eligible, tree);
 
-  const selected: RelatedCandidate[] = [];
-  let totalChars = 0;
+  // FAIR selection: round-robin across the referencing changed files so one
+  // high-fan-out file (a controller importing 20+ services) cannot crowd out
+  // another changed file's only — and therefore most review-critical —
+  // dependencies. Each round, every changed file places its next-best
+  // unselected candidate until the count/char budgets are exhausted.
+  const byReferencer = new Map<string, RelatedCandidate[]>();
   for (const candidate of ranked) {
-    if (selected.length >= RELATED_FILES_MAX) break;
-    const estimate = Math.min(sizeOf(candidate.path), DEP_FILE_MAX_CHARS);
-    if (totalChars + estimate > RELATED_TOTAL_MAX_CHARS) continue;
-    totalChars += estimate;
-    selected.push(candidate);
+    for (const ref of candidate.referencedBy) {
+      const queue = byReferencer.get(ref);
+      if (queue) queue.push(candidate);
+      else byReferencer.set(ref, [candidate]);
+    }
   }
+  const referencerOrder = changedFiles.map((f) => f.filename).filter((f) => byReferencer.has(f));
+
+  const selectedPaths = new Set<string>();
+  const selected: RelatedCandidate[] = [];
+  const cursors = new Map<string, number>();
+  let totalChars = 0;
+  let progress = true;
+  while (progress && selected.length < RELATED_FILES_MAX) {
+    progress = false;
+    for (const ref of referencerOrder) {
+      if (selected.length >= RELATED_FILES_MAX) break;
+      const queue = byReferencer.get(ref) ?? [];
+      let idx = cursors.get(ref) ?? 0;
+      while (idx < queue.length) {
+        const candidate = queue[idx++];
+        if (selectedPaths.has(candidate.path)) continue;
+        const estimate = Math.min(sizeOf(candidate.path), DEP_FILE_MAX_CHARS);
+        if (totalChars + estimate > RELATED_TOTAL_MAX_CHARS) continue;
+        selectedPaths.add(candidate.path);
+        selected.push(candidate);
+        totalChars += estimate;
+        progress = true;
+        break;
+      }
+      cursors.set(ref, idx);
+    }
+  }
+  // Prompt (and trim-stage slicing) still sees global rank order.
+  const rankIndex = new Map(ranked.map((c, i) => [c.path, i]));
+  selected.sort((a, b) => (rankIndex.get(a.path) ?? 0) - (rankIndex.get(b.path) ?? 0));
 
   // ── Fetch contents (rank order preserved) ──
   const truncate = (content: string) =>
