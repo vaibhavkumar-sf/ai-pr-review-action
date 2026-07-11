@@ -8,6 +8,7 @@ import {
   SPECIALIST_CATEGORY_IDS,
 } from '../config/taxonomy';
 import { STRENGTHS_MIN_SCORE, TABLE_DESCRIPTION_CHARS } from '../config/limits';
+import { formatDuration } from '../utils/text';
 
 /**
  * Formats the merged review result into a markdown comment for posting on the PR.
@@ -270,12 +271,6 @@ function countByCategory(findings: Finding[]): Array<[ReviewCategory, number]> {
     counts.set(f.category, (counts.get(f.category) || 0) + 1);
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = (ms / 1000).toFixed(1);
-  return `${seconds}s`;
 }
 
 function truncate(text: string, maxLen: number): string {

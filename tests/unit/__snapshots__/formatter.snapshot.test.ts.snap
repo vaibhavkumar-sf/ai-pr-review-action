@@ -3,7 +3,7 @@
 exports[`formatReviewComment snapshot renders a passing zero-findings comment in separate mode 1`] = `
 "## AI Code Review
 
-> **Model:** \`glm-5.2\` | **Mode:** \`separate\` | **Profile:** \`standard\` | **Duration:** 154.0s
+> **Model:** \`glm-5.2\` | **Mode:** \`separate\` | **Profile:** \`standard\` | **Duration:** 2m 34s
 
 ### Summary
 
@@ -23,8 +23,8 @@ exports[`formatReviewComment snapshot renders a passing zero-findings comment in
 
 | Agent | Score | Findings | Duration | Status |
 |-------|-------|----------|----------|--------|
-| security | 9/10 | 0 | 154.0s | ✅ Complete |
-| testing | N/A | 0 | 154.0s | ❌ Failed |
+| security | 9/10 | 0 | 2m 34s | ✅ Complete |
+| testing | N/A | 0 | 2m 34s | ❌ Failed |
 
 **security:** Solid change overall.
 
@@ -62,7 +62,7 @@ Custom footer
 exports[`formatReviewComment snapshot renders the full summary comment for a combined-mode run 1`] = `
 "## AI Code Review
 
-> **Model:** \`glm-5.2\` | **Mode:** \`combined\` | **Duration:** 154.0s
+> **Model:** \`glm-5.2\` | **Mode:** \`combined\` | **Duration:** 2m 34s
 
 ### Summary
 
@@ -144,7 +144,7 @@ No unit test covers UserRepo.
 
 | Agent | Score | Findings | Duration | Status |
 |-------|-------|----------|----------|--------|
-| comprehensive | 8/10 | 3 | 154.0s | ✅ Complete |
+| comprehensive | 8/10 | 3 | 2m 34s | ✅ Complete |
 
 **comprehensive:** Solid change overall.
 

@@ -134,7 +134,9 @@ export async function appendToPRDescription(
   if (merged.highCount > 0) aiParts.push(`| ${SEVERITY_ICONS.high} High | ${merged.highCount} |`);
   if (merged.mediumCount > 0) aiParts.push(`| ${SEVERITY_ICONS.medium} Medium | ${merged.mediumCount} |`);
   if (merged.lowCount > 0) aiParts.push(`| ${SEVERITY_ICONS.low} Low | ${merged.lowCount} |`);
+  if (merged.nitCount > 0) aiParts.push(`| ${SEVERITY_ICONS.nit} Nit | ${merged.nitCount} |`);
   if (merged.totalFindings === 0) aiParts.push('| ✅ None | 0 |');
+  aiParts.push(`| **Total** | **${merged.totalFindings}** |`);
   aiParts.push('');
   const profileMeta = config.reviewMode === 'separate' ? ` | Profile: ${config.reviewProfile}` : '';
   aiParts.push(`<sub>Last reviewed: ${new Date().toISOString()} | Model: ${config.anthropicModel} | Mode: ${config.reviewMode}${profileMeta}</sub>`);

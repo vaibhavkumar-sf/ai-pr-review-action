@@ -183,9 +183,9 @@ inputs:
     default: 'true'
   # ─── Advanced ────────────────────────────────────────────
   agent_timeout:
-    description: 'Timeout in seconds for each review agent AI call. 600 leaves headroom for slow endpoint spells: glm-5.2 streams all thinking before writing findings, and a timeout mid-thought yields 0 findings'
+    description: 'Timeout in seconds for each review agent AI call. 800 leaves headroom for slow endpoint spells: glm-5.2 streams all thinking before writing findings, and a timeout mid-thought yields 0 findings'
     required: false
-    default: '600'
+    default: '800'
   max_retries:
     description: 'Maximum retries per agent on AI API failure'
     required: false

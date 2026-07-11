@@ -16,6 +16,7 @@ import { runPhase } from './phase';
 import { isTestFile } from '../config/patterns';
 import { INLINE_SEVERITIES } from '../config/taxonomy';
 import { logger, writeJobSummary } from '../utils/logger';
+import { formatDuration } from '../utils/text';
 
 /**
  * The review pipeline. Each phase runs through runPhase() for grouped logs,
@@ -366,7 +367,7 @@ function buildJobSummary(
     `| Model | \`${config.anthropicModel}\` |`,
     `| Mode | \`${config.reviewMode}\` |`,
     `| Findings | ${merged.totalFindings} (🛑 ${merged.criticalCount} / 🔴 ${merged.highCount} / 🟡 ${merged.mediumCount} / 🟢 ${merged.lowCount} / 💬 ${merged.nitCount}) |`,
-    `| Duration | ${Math.round(merged.durationMs / 1000)}s |`,
+    `| Duration | ${formatDuration(merged.durationMs)} |`,
     `| Agents failed | ${failed.length ? failed.join(', ') : 'none'} |`,
     `| Review comment | ${commentUrl} |`,
     '',

@@ -307,9 +307,9 @@ export const INPUTS: readonly InputSpec[] = [
   {
     name: 'agent_timeout',
     type: 'number',
-    default: '600',
+    default: '800',
     group: 'Advanced',
-    description: 'Timeout in seconds for each review agent AI call. 600 leaves headroom for slow endpoint spells: glm-5.2 streams all thinking before writing findings, and a timeout mid-thought yields 0 findings',
+    description: 'Timeout in seconds for each review agent AI call. 800 leaves headroom for slow endpoint spells: glm-5.2 streams all thinking before writing findings, and a timeout mid-thought yields 0 findings',
   },
   {
     name: 'max_retries',
