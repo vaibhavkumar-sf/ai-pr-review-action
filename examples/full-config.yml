@@ -20,8 +20,12 @@ jobs:
           anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
 
           # ─── Provider (uses same secrets as ai-test-quality-analyzer) ──
+          # ai_provider: 'anthropic' (default, Anthropic SDK) | 'openai' (OpenAI-compatible /chat/completions)
+          # The anthropic_* inputs below apply to whichever dialect is selected.
+          ai_provider: 'anthropic'
           anthropic_base_url: ${{ secrets.ANTHROPIC_BASE_URL }}
-          anthropic_model: 'claude-sonnet-4-20250514'
+          # anthropic_model may be a comma-separated fallback chain (first accepted model wins)
+          anthropic_model: 'claude-opus-4-8'
           max_tokens: '8192'
           temperature: '0.2'
 

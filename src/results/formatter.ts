@@ -1,33 +1,14 @@
-import { ActionConfig, AgentResult, Finding, MergedReviewResult, ReviewCategory, ReviewContext, Severity } from '../types';
+import { ActionConfig, AgentResult, Finding, MergedReviewResult, ReviewCategory, ReviewContext } from '../types';
 import { generateArchitectureDiagram } from './diagram-generator';
 import { RunActivityStats } from './backstage-reporter';
-
-const SEVERITY_ICONS: Record<Severity, string> = {
-  critical: '\uD83D\uDED1',
-  high: '\uD83D\uDD34',
-  medium: '\uD83D\uDFE1',
-  low: '\uD83D\uDFE2',
-  nit: '\uD83D\uDCAC',
-};
-
-const SEVERITY_LABELS: Record<Severity, string> = {
-  critical: 'Critical',
-  high: 'High',
-  medium: 'Medium',
-  low: 'Low',
-  nit: 'Nit',
-};
-
-const CATEGORY_LABELS: Record<ReviewCategory, string> = {
-  'security': '🔒 Security',
-  'code-quality': '📝 Code Quality',
-  'performance': '⚡ Performance',
-  'type-safety': '🔍 Type Safety',
-  'architecture': '🏗️ Architecture',
-  'testing': '🧪 Testing',
-  'api-design': '🔌 API Design',
-  'comprehensive': '🔎 Comprehensive',
-};
+import {
+  CATEGORY_LABELS,
+  SEVERITY_ICONS,
+  SEVERITY_LABELS,
+  SPECIALIST_CATEGORY_IDS,
+} from '../config/taxonomy';
+import { STRENGTHS_MIN_SCORE, TABLE_DESCRIPTION_CHARS } from '../config/limits';
+import { formatDuration } from '../utils/text';
 
 /**
  * Formats the merged review result into a markdown comment for posting on the PR.
@@ -40,9 +21,7 @@ export function formatReviewComment(
   const parts: string[] = [];
 
   // Header (no marker here — postOrUpdateComment adds it)
-
-  // Header
-  const statusIcon = result.passed ? '\u2705' : '\u274C';
+  const statusIcon = result.passed ? '✅' : '❌';
   const headerText = config.commentHeader || `${statusIcon} AI Code Review`;
   parts.push(`## ${headerText}`);
   parts.push('');
@@ -80,9 +59,9 @@ export function formatReviewComment(
 
   // Pass/fail status
   if (result.passed) {
-    parts.push('> \u2705 **Review passed** \u2014 no findings above the configured threshold.');
+    parts.push('> ✅ **Review passed** — no findings above the configured threshold.');
   } else {
-    parts.push(`> \u274C **Review failed** \u2014 findings above the \`${config.failThreshold}\` threshold detected.`);
+    parts.push(`> ❌ **Review failed** — findings above the \`${config.failThreshold}\` threshold detected.`);
   }
   parts.push('');
 
@@ -96,7 +75,7 @@ export function formatReviewComment(
     for (const f of severeFindings) {
       const sevLabel = `${SEVERITY_ICONS[f.severity]} ${SEVERITY_LABELS[f.severity]}`;
       const fileLink = f.file ? `\`${f.file}:${f.line}\`` : 'N/A';
-      const desc = truncate(f.description, 120);
+      const desc = truncate(f.description, TABLE_DESCRIPTION_CHARS);
       parts.push(`| ${sevLabel} | ${fileLink} | ${escapeMarkdownTable(f.title)} | ${escapeMarkdownTable(desc)} |`);
     }
     parts.push('');
@@ -159,7 +138,7 @@ export function formatReviewComment(
   parts.push('| Agent | Score | Findings | Duration | Status |');
   parts.push('|-------|-------|----------|----------|--------|');
   for (const agent of result.agentResults) {
-    const statusText = agent.error ? '\u274C Failed' : '\u2705 Complete';
+    const statusText = agent.error ? '❌ Failed' : '✅ Complete';
     const scoreDisplay = agent.error ? 'N/A' : `${agent.score}/10`;
     parts.push(
       `| ${agent.agentName} | ${scoreDisplay} | ${agent.findings.length} | ${formatDuration(agent.durationMs)} | ${statusText} |`,
@@ -215,7 +194,7 @@ export function formatReviewComment(
   // Powered by
   parts.push('---');
   parts.push(
-    '<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) \u2014 automated code review with multi-agent AI</sub>',
+    '<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>',
   );
   parts.push('');
 
@@ -225,8 +204,9 @@ export function formatReviewComment(
 /**
  * Formats the "Backstage Tracking Metrics" section appended to the summary
  * comment after all comment-lifecycle actions complete. It mirrors exactly
- * what is POSTed to the Backstage tracker — every severity count, every
- * category count, and this run's lifecycle activity.
+ * what is POSTed to the Backstage tracker, rendered as three visually distinct
+ * groups — severity counts, category counts, and this run's activity — so each
+ * group reads against its own total instead of one flat metric list.
  */
 export function formatTrackingMetrics(
   result: MergedReviewResult,
@@ -238,23 +218,37 @@ export function formatTrackingMetrics(
   parts.push('');
   parts.push('### 📊 Backstage Tracking Metrics');
   parts.push('');
-  parts.push('| Metric | Count |');
-  parts.push('|--------|-------|');
-  parts.push(`| **Total findings** | **${result.totalFindings}** |`);
+
+  // Group 1: findings by severity (sums to the total)
+  parts.push(`#### Findings by Severity — ${result.totalFindings} total`);
+  parts.push('');
+  parts.push('| Severity | Count |');
+  parts.push('|----------|-------|');
   parts.push(`| ${SEVERITY_ICONS.critical} Critical | ${result.criticalCount} |`);
   parts.push(`| ${SEVERITY_ICONS.high} High | ${result.highCount} |`);
   parts.push(`| ${SEVERITY_ICONS.medium} Medium | ${result.mediumCount} |`);
   parts.push(`| ${SEVERITY_ICONS.low} Low | ${result.lowCount} |`);
   parts.push(`| ${SEVERITY_ICONS.nit} Nit | ${result.nitCount} |`);
+  parts.push(`| **Total** | **${result.totalFindings}** |`);
+  parts.push('');
 
+  // Group 2: findings by category (sums to the same total)
   const categoryCounts = new Map<ReviewCategory, number>(countByCategory(result.findings));
-  const ALL_CATEGORIES: ReviewCategory[] = [
-    'security', 'code-quality', 'performance', 'type-safety', 'architecture', 'testing', 'api-design',
-  ];
-  for (const category of ALL_CATEGORIES) {
+  parts.push(`#### Findings by Category — ${result.totalFindings} total`);
+  parts.push('');
+  parts.push('| Category | Count |');
+  parts.push('|----------|-------|');
+  for (const category of SPECIALIST_CATEGORY_IDS) {
     parts.push(`| ${CATEGORY_LABELS[category]} | ${categoryCounts.get(category) ?? 0} |`);
   }
+  parts.push(`| **Total** | **${result.totalFindings}** |`);
+  parts.push('');
 
+  // Group 3: comment-lifecycle activity for THIS run (not finding counts)
+  parts.push('#### Review Activity (this run)');
+  parts.push('');
+  parts.push('| Activity | Count |');
+  parts.push('|----------|-------|');
   parts.push(`| 🆕 New inline comments (this run) | ${activity.inlineCommentsNew} |`);
   parts.push(`| ♻️ Carried-over comments (already posted) | ${activity.inlineCommentsExisting} |`);
   parts.push(`| ✅ Threads resolved (fixed in code) | ${activity.staleThreadsResolved} |`);
@@ -279,12 +273,6 @@ function countByCategory(findings: Finding[]): Array<[ReviewCategory, number]> {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = (ms / 1000).toFixed(1);
-  return `${seconds}s`;
-}
-
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.substring(0, maxLen - 3) + '...';
@@ -296,12 +284,12 @@ function escapeMarkdownTable(text: string): string {
 
 /**
  * Extracts strengths from agent results.
- * Agents that scored >= 8 and have a summary are considered to have identified strengths.
+ * Agents that scored highly and have a summary are considered to have identified strengths.
  */
 function extractStrengths(agentResults: AgentResult[]): string[] {
   const strengths: string[] = [];
   for (const agent of agentResults) {
-    if (agent.score >= 8 && !agent.error) {
+    if (agent.score >= STRENGTHS_MIN_SCORE && !agent.error) {
       strengths.push(`**${agent.agentName}** (${agent.score}/10): ${agent.summary}`);
     }
   }

@@ -1,4 +1,8 @@
-# Use OpenRouter as the AI provider instead of Anthropic directly
+# Use an OpenAI-compatible endpoint (OpenRouter) instead of the Anthropic dialect.
+#
+# ai_provider: 'openai' switches the action to the OpenAI-compatible wire protocol
+# (/chat/completions with SSE streaming). The anthropic_* input names still apply —
+# they configure whichever dialect is selected.
 name: AI Code Review (OpenRouter)
 
 on:
@@ -16,7 +20,8 @@ jobs:
       - uses: sourcefuse/ai-pr-review-action@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          ai_provider: 'openai'
           anthropic_auth_token: ${{ secrets.OPENROUTER_API_KEY }}
           anthropic_base_url: 'https://openrouter.ai/api/v1'
-          anthropic_model: 'anthropic/claude-sonnet-4-20250514'
+          anthropic_model: 'anthropic/claude-opus-4-8'
           review_profile: 'standard'

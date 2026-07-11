@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import { ActionConfig, ChangedFile, Framework, RepoContext } from '../types';
+import { MONOREPO_SCAN_LIMIT } from '../config/limits';
 
 export async function gatherRepoContext(
   config: ActionConfig,
@@ -158,7 +159,7 @@ async function detectFromMonorepo(
   }
 
   // Check up to 3 sub-package package.json files
-  const dirsToCheck = Array.from(subDirs).slice(0, 3);
+  const dirsToCheck = Array.from(subDirs).slice(0, MONOREPO_SCAN_LIMIT);
   const checks = dirsToCheck.map(async (dir) => {
     try {
       const params: Parameters<typeof octokit.repos.getContent>[0] = {

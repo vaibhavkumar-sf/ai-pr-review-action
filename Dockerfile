@@ -11,8 +11,10 @@ COPY package.json package-lock.json tsconfig.json ./
 # Install ALL dependencies (including devDeps for tsc)
 RUN npm ci
 
-# Copy source code
+# Copy source code (+ schema/action.yml pair so prebuild's check:action can verify sync)
 COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY action.yml ./
 
 # Build TypeScript
 RUN npm run build

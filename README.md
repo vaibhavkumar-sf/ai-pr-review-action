@@ -76,13 +76,34 @@ enable_performance_review: 'false'  # Remove performance from standard
 
 ## Provider Support
 
-Works with any Anthropic-compatible API. Uses the same secrets as `sourcefuse/ai-test-quality-analyzer`:
+The action speaks two API dialects, selected with the `ai_provider` input, so it works with virtually any model endpoint — now and in the future. It uses the same secrets as `sourcefuse/ai-test-quality-analyzer`.
 
-| Provider | Configuration |
-|----------|--------------|
-| Anthropic (default) | `anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}` |
-| OpenRouter | `anthropic_base_url: 'https://openrouter.ai/api/v1'` + `anthropic_auth_token: ${{ secrets.OPENROUTER_API_KEY }}` |
-| GLM / Custom | Set `anthropic_base_url` to your endpoint |
+| `ai_provider` | Wire protocol | Use for |
+|---------------|---------------|---------|
+| `anthropic` (default) | Anthropic Messages SDK | Anthropic, or any Anthropic-compatible endpoint (org z.ai gateway, etc.) |
+| `openai` | OpenAI-compatible `/chat/completions` (raw fetch + SSE streaming) | OpenRouter, z.ai coding API, vLLM, LiteLLM, or any OpenAI-compatible server |
+
+The `anthropic_base_url`, `anthropic_auth_token`, and `anthropic_model` inputs apply to **whichever dialect is selected** (the names are kept for backward compatibility). `anthropic_model` may be a comma-separated fallback chain — the first model that the endpoint accepts is used for the rest of the run.
+
+```yaml
+# Default (Anthropic dialect) — nothing extra needed
+with:
+  anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+
+# OpenAI-compatible dialect (e.g. OpenRouter)
+with:
+  ai_provider: 'openai'
+  anthropic_base_url: 'https://openrouter.ai/api/v1'
+  anthropic_auth_token: ${{ secrets.OPENROUTER_API_KEY }}
+  anthropic_model: 'anthropic/claude-opus-4-8'
+```
+
+| Provider | `ai_provider` | Configuration |
+|----------|---------------|---------------|
+| Anthropic / z.ai gateway (default) | `anthropic` | `anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}` |
+| OpenRouter | `openai` | `anthropic_base_url: 'https://openrouter.ai/api/v1'` + `anthropic_auth_token: ${{ secrets.OPENROUTER_API_KEY }}` |
+| z.ai coding API | `openai` | `anthropic_base_url: 'https://api.z.ai/api/coding/paas/v4'` + your token |
+| Any OpenAI-compatible server | `openai` | Set `anthropic_base_url` to your endpoint |
 
 ## JIRA Integration (Optional)
 

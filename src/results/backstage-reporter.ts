@@ -1,7 +1,6 @@
 import * as core from '@actions/core';
 import { ActionConfig, AgentResult, Finding, MergedReviewResult, ReviewCategory, ReviewContext } from '../types';
-
-const REPORT_TIMEOUT_MS = 10000;
+import { BACKSTAGE_TIMEOUT_MS } from '../config/limits';
 
 /**
  * Per-finding record sent to Backstage. Field names are snake_case to match
@@ -56,6 +55,7 @@ export interface BackstageReviewPayload {
 
   // Aggregates
   review_status: string;
+  skip_reason: string;
   review_passed: boolean;
   total_findings: number;
   critical_count: number;
@@ -103,10 +103,78 @@ export async function reportToBackstage(
   activity: RunActivityStats,
 ): Promise<boolean> {
   const payload = buildPayload(config, merged, context, agentResults, activity);
+  return postPayload(config, payload, `${payload.total_findings} findings`);
+}
 
+/**
+ * Reports a run that produced NO review (skipped or failed) so the tracker
+ * still records every run. Same payload shape with zero counts and the
+ * status/reason set — mirrors the always()/failure() telemetry pattern of
+ * sourcefuse/ai-test-quality-analyzer.
+ */
+export async function reportRunOutcome(
+  config: ActionConfig,
+  status: 'skipped' | 'failed',
+  reason: string,
+): Promise<boolean> {
+  if (!config.postDataUrl) return false;
+  const payload: BackstageReviewPayload = {
+    repo_name: `${config.owner}/${config.repo}`,
+    pr_number: config.prNumber,
+    pr_title: '',
+    pr_url: `https://github.com/${config.owner}/${config.repo}/pull/${config.prNumber}`,
+    pr_creator: '',
+    branch_name: '',
+    base_branch: '',
+    head_sha: '',
+    workflow_run_id: config.workflowRunId,
+    workflow_run_number: config.workflowRunNumber,
+    run_timestamp: new Date().toISOString(),
+    review_mode: config.reviewMode,
+    review_profile: config.reviewProfile,
+    framework: config.framework,
+    model_name: config.anthropicModel,
+    ai_provider: resolveProviderName(config.anthropicBaseUrl),
+    review_status: status,
+    skip_reason: reason,
+    review_passed: false,
+    total_findings: 0,
+    critical_count: 0,
+    high_count: 0,
+    medium_count: 0,
+    low_count: 0,
+    nit_count: 0,
+    security_count: 0,
+    code_quality_count: 0,
+    performance_count: 0,
+    type_safety_count: 0,
+    architecture_count: 0,
+    testing_count: 0,
+    api_design_count: 0,
+    average_score: 0,
+    agents_run: '',
+    agents_failed: '',
+    files_reviewed: 0,
+    duration_seconds: 0,
+    inline_comments_new: 0,
+    inline_comments_existing: 0,
+    stale_threads_resolved: 0,
+    replies_posted: 0,
+    threads_resolved_from_replies: 0,
+    bot_comments_hidden: 0,
+    findings: [],
+  };
+  return postPayload(config, payload, `status=${status} (${reason})`);
+}
+
+async function postPayload(
+  config: ActionConfig,
+  payload: BackstageReviewPayload,
+  summary: string,
+): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REPORT_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), BACKSTAGE_TIMEOUT_MS);
     try {
       const response = await fetch(config.postDataUrl, {
         method: 'POST',
@@ -118,7 +186,7 @@ export async function reportToBackstage(
         core.warning(`Backstage report failed with HTTP ${response.status} (non-critical, continuing)`);
         return false;
       }
-      core.info(`Reported review data to Backstage (${payload.total_findings} findings)`);
+      core.info(`Reported review data to Backstage (${summary})`);
       return true;
     } finally {
       clearTimeout(timer);
@@ -152,8 +220,8 @@ function buildPayload(
     branch_name: context.headBranch,
     base_branch: context.baseBranch,
     head_sha: context.headSha,
-    workflow_run_id: process.env.GITHUB_RUN_ID || '',
-    workflow_run_number: parseInt(process.env.GITHUB_RUN_NUMBER || '0', 10),
+    workflow_run_id: config.workflowRunId,
+    workflow_run_number: config.workflowRunNumber,
     run_timestamp: new Date().toISOString(),
 
     review_mode: config.reviewMode,
@@ -163,6 +231,7 @@ function buildPayload(
     ai_provider: resolveProviderName(config.anthropicBaseUrl),
 
     review_status: 'completed',
+    skip_reason: '',
     review_passed: merged.passed,
     total_findings: merged.totalFindings,
     critical_count: merged.criticalCount,

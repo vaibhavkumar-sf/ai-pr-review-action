@@ -1,12 +1,6 @@
-import { Finding, Severity } from '../types';
-
-const SEVERITY_RANK: Record<Severity, number> = {
-  critical: 5,
-  high: 4,
-  medium: 3,
-  low: 2,
-  nit: 1,
-};
+import { Finding } from '../types';
+import { SEVERITY_RANK } from '../config/taxonomy';
+import { DEDUP_JACCARD_MIN, DEDUP_LEVENSHTEIN_MIN, DEDUP_LINE_PROXIMITY } from '../config/limits';
 
 /**
  * Removes duplicate findings that share the same file and line with
@@ -71,8 +65,8 @@ export function deduplicateFindings(findings: Finding[]): Finding[] {
  * 2. AND one of: similar titles, overlapping keywords, or same description topic
  */
 function isDuplicate(a: Finding, b: Finding): boolean {
-  // Must be on nearly the same line (within 2 lines)
-  if (Math.abs(a.line - b.line) > 2) return false;
+  // Must be on nearly the same line
+  if (Math.abs(a.line - b.line) > DEDUP_LINE_PROXIMITY) return false;
 
   const titleA = a.title.toLowerCase().trim();
   const titleB = b.title.toLowerCase().trim();
@@ -87,14 +81,14 @@ function isDuplicate(a: Finding, b: Finding): boolean {
   const wordsA = extractKeywords(titleA + ' ' + a.description.toLowerCase());
   const wordsB = extractKeywords(titleB + ' ' + b.description.toLowerCase());
   const overlap = keywordOverlap(wordsA, wordsB);
-  if (overlap >= 0.5) return true;
+  if (overlap >= DEDUP_JACCARD_MIN) return true;
 
   // Levenshtein similarity for fuzzy matching
   const maxLen = Math.max(titleA.length, titleB.length);
   if (maxLen === 0) return true;
   const distance = levenshteinDistance(titleA, titleB);
   const similarity = 1 - distance / maxLen;
-  if (similarity >= 0.65) return true;
+  if (similarity >= DEDUP_LEVENSHTEIN_MIN) return true;
 
   return false;
 }

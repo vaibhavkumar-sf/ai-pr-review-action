@@ -1,5 +1,7 @@
-export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'nit';
-export type ReviewCategory = 'security' | 'code-quality' | 'performance' | 'type-safety' | 'architecture' | 'testing' | 'api-design' | 'comprehensive';
+// Severity and ReviewCategory are DERIVED from the taxonomy tables — the
+// single source of truth for ids, labels, icons, and ranks.
+import type { ReviewCategory, Severity } from './config/taxonomy';
+export type { ReviewCategory, Severity };
 export type ReviewProfile = 'strict' | 'standard' | 'minimal';
 export type ReviewMode = 'separate' | 'combined';
 export type Framework = 'angular' | 'loopback4' | 'both' | 'auto' | 'generic';
@@ -78,18 +80,23 @@ export interface RepoContext {
 
 export interface ActionConfig {
   // Provider
+  // API dialect: 'anthropic' (Anthropic-compatible, default) or 'openai'
+  // (OpenAI-compatible /chat/completions). The anthropic* fields below apply
+  // to whichever dialect is selected.
+  aiProvider: 'anthropic' | 'openai';
   anthropicAuthToken: string;
   anthropicBaseUrl: string;
   // Model id, or a comma-separated fallback chain tried in order (the next is
   // used only when a model is rejected as unknown/unsupported by the endpoint).
   anthropicModel: string;
   maxTokens: number;
-  // Extended-thinking budget in tokens, added on top of maxTokens. High by default.
+  // Extended-thinking budget in tokens, added on top of maxTokens. Directly
+  // sets how long the model reasons before writing findings; 0 disables.
   thinkingBudget: number;
   // Total context window of the target model, in tokens. The assembled prompt is
   // trimmed to fit within (contextWindow - reserved output) so requests are not
-  // rejected with model_context_window_exceeded. Default 200000 (the GLM tier the
-  // default model maps to); raise to 1000000 only for a genuine 1M-context model.
+  // rejected with model_context_window_exceeded. Default 1000000 (glm-5.2 /
+  // Opus-tier); lower it for smaller-window models.
   contextWindow: number;
   temperature: number;
 
@@ -98,6 +105,9 @@ export interface ActionConfig {
   owner: string;
   repo: string;
   prNumber: number;
+  // GitHub runner context (resolved in the config layer, not read ad-hoc)
+  workflowRunId: string;
+  workflowRunNumber: number;
 
   // Profile & toggles
   reviewProfile: ReviewProfile;

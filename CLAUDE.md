@@ -15,182 +15,124 @@ Findings are posted as structured PR comments with inline code annotations, and 
 | Item | Location |
 |------|----------|
 | Entry point | `src/index.ts` |
-| Main orchestration | `src/orchestrator.ts` |
-| Agent base class | `src/agents/base-agent.ts` |
-| Agent prompts | `prompts/*.md` |
+| Main orchestration | `src/pipeline/orchestrator.ts` (phase list via `src/pipeline/phase.ts`) |
+| Input registry (SSOT) | `src/config/schema.ts` → generates `action.yml` |
+| Input parsing | `src/config/inputs.ts` |
+| All tunables | `src/config/limits.ts` |
+| Severities/categories | `src/config/taxonomy.ts` (all maps derived) |
+| Agent base class | `src/agents/base-agent.ts`; specialists in `src/agents/specialists.ts` |
+| Review prompts | `prompts/*.md`; meta-prompts in `prompts/system/*.md` (loader: `src/prompts/loader.ts`) |
+| Providers | `src/providers/base-provider.ts` + anthropic/openai dialects |
 | Type definitions | `src/types.ts` |
-| Action inputs | `action.yml` |
-| Architecture docs | `docs/architecture.md` |
+| Architecture docs | `docs/architecture.md` (plan: `docs/refactor-plan.md`) |
 | Examples | `examples/*.yml` |
-| Default model | `claude-opus-4-8` (org z.ai endpoint maps Claude-tier names → GLM ~200K) — override per provider |
+| Default model chain | `glm-5.2,glm-5.2[1m],claude-opus-4-8` (org z.ai endpoint) — override per provider |
 
 ## Build & Run
 
 ```bash
 npm install          # Install dependencies
-npm run build        # Compile TypeScript → dist/
-npm test             # Run Jest tests
+npm run build        # prebuild (clean + check:action) + tsc → dist/
+npm run gen:action   # Regenerate action.yml from src/config/schema.ts
+npm test             # Jest tests
 npm run lint         # ESLint check
-npm run lint:fix     # ESLint auto-fix
-```
-
-Docker (as GitHub Actions runs it):
-```bash
+npm run ci           # build + lint + test
 docker build -t ai-pr-review .
 ```
 
-The Dockerfile uses multi-stage build: builder compiles TS, production stage has only runtime deps + compiled output + prompts.
+## Non-Negotiable Rules
 
-## Architecture Overview
+- **`action.yml` is GENERATED.** Never edit it by hand — edit `src/config/schema.ts` and run `npm run gen:action`. `check:action` in `prebuild` fails the build on drift. (Docker actions receive action.yml defaults via `INPUT_*` env, so a hand-edited action.yml silently shadows code — this caused production bugs.)
+- **No magic numbers in feature code** — add named constants to `src/config/limits.ts` with a one-line rationale.
+- **Severity/category data comes from `taxonomy.ts`** — never re-declare icons/labels/ranks locally.
+- **Never log secrets** — inputs marked `secret: true` in the schema are masked via `core.setSecret` at parse time; log presence only.
+- **Fail-safety is declared, not improvised** — wrap new pipeline work in `runPhase(name, {critical}, fn, fallback)`.
 
-```
-src/
-  index.ts              ← Entry point: parse config → runReview()
-  orchestrator.ts       ← 13-phase review flow (THE core file)
-  types.ts              ← All TypeScript types/interfaces
-  agents/
-    base-agent.ts       ← Template Method: buildSystemPrompt → buildUserPrompt → parseResponse
-    *.agent.ts           ← 7 concrete agents (just set name/category/icon)
-  config/
-    action-inputs.ts    ← Parse GitHub Action inputs → ActionConfig
-    profiles.ts         ← strict/standard/minimal → which agents are enabled
-    defaults.ts         ← All default values (model, tokens, exclude patterns, etc.)
-  context/
-    pr-context.ts       ← Fetch PR diff, file contents, dependency files
-    jira-context.ts     ← Optional JIRA ticket extraction (fault-tolerant)
-    repo-context.ts     ← Framework detection + CLAUDE.md reader
-  github/
-    pr-commenter.ts     ← Fixed comment with progress, minimize old + noisy bot comments, resolve stale
-    inline-reviewer.ts  ← Post inline review comments via GitHub Review API
-    reply-handler.ts    ← Verify human replies vs code, post justification, resolve valid ones
-    diff-parser.ts      ← Parse unified diff, map line numbers to diff positions
-  providers/
-    ai-provider.ts      ← Interface: chat(messages, options) → response
-    anthropic.provider.ts ← Anthropic SDK with retry + configurable baseURL
-    provider-factory.ts  ← createAIProvider(config)
-  results/
-    deduplicator.ts     ← Programmatic dedup (Levenshtein + Jaccard)
-    consolidation-agent.ts ← AI-powered semantic dedup (final pass, separate mode only)
-    merger.ts           ← Count by severity, determine pass/fail
-    formatter.ts        ← Format findings → markdown PR comment (severity + category tables)
-    diagram-generator.ts ← Generate Mermaid from file imports
-    backstage-reporter.ts ← POST review metrics + all findings to post_data_url
-prompts/
-  comprehensive.md      ← Combined-mode all-at-once prompt (every dimension, per-finding category)
-  security.md           ← OWASP, injections, auth, workflow security
-  code-quality.md       ← SOLID, DRY, KISS, complexity, error typing, inline types
-  performance.md        ← N+1, memory leaks, async, pagination
-  type-safety.md        ← Return types, param types, unsafe casts (JSDoc checks disabled)
-  architecture.md       ← Layering, DI, circular deps
-  testing.md            ← Coverage, edge cases, mocking (never comments on test files)
-  api-design.md         ← REST conventions, status codes, validation
-  angular-additions.md  ← OnPush, RxJS, Signals, lazy loading
-  loopback4-additions.md ← @model descriptions, HttpErrors, @authorize, datasources, wildcards
-```
+## Architecture
 
-Agents also live in `src/agents/comprehensive.agent.ts` (combined mode): it overrides `resolveCategory()` to keep per-finding categories and `getMaxTokens()` to floor at 16384 (a truncated JSON response would lose all findings).
+See `docs/architecture.md` for the full map, fail-safety table, provider matrix, and extension guides. Summary:
+
+- `pipeline/orchestrator.ts` — flat list of `runPhase()` calls (startup → pre-flight → context → agents → consolidation → summary comment → replies/inline → description → outputs/telemetry).
+- `config/` — schema (inputs SSOT), inputs (parse + batched validation), limits, taxonomy, patterns, profiles.
+- `providers/` — `BaseProvider` holds chain fallback+latching, retry/backoff, streaming heartbeat, timeouts, thinking fallback, preflight; dialects implement `streamOnce`/`probe`/error classifiers. `ai_provider` input: `anthropic` (default, SDK) or `openai` (raw fetch SSE `/chat/completions`, works with any OpenAI-compatible endpoint).
+- `github/threads.ts` — the single GraphQL review-threads module (fetch/resolve/minimize).
+- `utils/` — mermaid sanitizer+validation, import extractor, json extraction, line numbering, logger (+ job summary).
 
 ## Key Design Decisions
 
-### Fault Tolerance — NEVER crash the action
-- JIRA failure → skip JIRA context, continue review
-- Individual agent failure → log warning, continue with other agents
-- CLAUDE.md missing → skip project context, continue
-- Consolidation agent failure → use programmatic dedup results
-- PR description AI failure → use static fallback description
-- `Promise.allSettled()` for all parallel operations
+### Fault tolerance — NEVER crash the action on best-effort work
+- Critical phases (pre-flight, context, agents, consolidation, summary comment) fail the run — with a failure comment, outputs, and a Backstage `failed` report first.
+- Everything else (bot cleanup, replies, inline comments, metrics, description, diagrams, telemetry, job summary) warns and continues.
+- Individual agent failures inside the agents phase are tolerated (`Promise.allSettled`); consolidation-AI failure falls back to programmatic dedup; description-AI failure falls back to a static description.
 
-### Review Flow (orchestrator.ts)
-1. Post initial progress comment
-2. Clean up noisy bot comments (`cleanupBotComments`: hide-all patterns + keep-latest per recurring type)
-3. Gather context (PR + JIRA + repo) in parallel
-4. Create AI provider + agents (combined mode: single ComprehensiveAgent; separate mode: filter by profile)
-5. Launch all agents in parallel (`Promise.allSettled`)
-6. Programmatic dedup → AI consolidation pass (separate mode only — skipped in combined mode) → merge
-7. Post final summary comment (replaces progress)
-8. Handle human replies (`ReplyHandler`: AI verdict vs current code → justification reply in every awaiting thread → resolve if valid) → resolve stale inline threads (skips threads with unanswered human replies) → post new inline comments (critical/high/medium, never on test files)
-9. Append AI description with Mermaid diagram to PR body
-10. Set action outputs → report to Backstage if `post_data_url` set → optionally fail
+### Comments strategy
+- **Summary comment:** one fixed comment per run; old ones minimized (not deleted) via GraphQL `minimizeComment(classifier: OUTDATED)`.
+- **Inline comments:** per finding via the Review API (`line` + `side: 'RIGHT'`), critical/high/medium only, never on test files.
+- **Stale threads:** auto-resolved when fixed (skipping threads with unanswered human replies).
+- **Tracking metrics:** grouped tables (by severity / by category / review activity), each with its own total.
+- **Finding counts:** only shown after consolidation, never during progress.
 
-### Comments Strategy
-- **Summary comment:** One fixed comment per run, old ones minimized (not deleted) via GraphQL `minimizeComment(classifier: OUTDATED)`
-- **Inline comments:** Individual per finding via GitHub Review API (`line` + `side: 'RIGHT'`)
-- **Stale threads:** Auto-resolved when the issue is fixed (via GraphQL `resolveReviewThread`)
-- **Finding counts:** Only shown after consolidation, NOT during progress
+### Deduplication — two passes
+1. **Programmatic** (`results/deduplicator.ts`): same file + within 2 lines + similar title (Levenshtein ≥ 0.65 OR Jaccard ≥ 0.5) — thresholds in `limits.ts`.
+2. **AI consolidation** (`results/consolidation-agent.ts`): semantic merge across agents (separate mode; skipped if ≤ 3 findings).
 
-### Deduplication — Two passes
-1. **Programmatic** (`deduplicator.ts`): Same file + within 2 lines + similar title (Levenshtein >= 0.65 OR Jaccard keyword overlap >= 0.5)
-2. **AI Consolidation** (`consolidation-agent.ts`): Sends all findings to one final AI call to merge semantic duplicates across agents. Skipped if <= 3 findings.
-
-### Exclude Patterns — Defaults are built-in
-Users only need to add project-specific extras via `exclude_patterns` input. Their patterns are **appended** to defaults, never replacing them. See `DEFAULT_EXCLUDE_PATTERNS` in `src/config/defaults.ts`.
-
-### Provider Agnostic
-Any Anthropic-compatible API works. Set `anthropic_base_url` to OpenRouter, GLM, etc. The SDK handles the rest.
+### Exclude patterns
+User `exclude_patterns` are **appended** to `DEFAULT_EXCLUDE_PATTERNS` (`src/config/patterns.ts`), never replacing them.
 
 ## Code Conventions
 
-- **TypeScript strict mode** — no `any` unless absolutely necessary
-- **Error handling** — always `error instanceof Error ? error.message : String(error)`
-- **Logging** — use `@actions/core` (core.info, core.warning, core.debug)
-- **No plain `throw new Error()`** in user-facing code
-- **Imports** — barrel exports via `index.ts` in each directory
-- **Agent prompts** — Markdown files in `prompts/`, loaded at runtime by `BaseAgent.loadPromptFile()`
-- **Line numbers** — File content sent to AI with `addLineNumbers()` format: `  26 | code here`
+- TypeScript strict mode — no `any` unless unavoidable
+- Errors: `error instanceof Error ? error.message : String(error)`
+- Logging via `@actions/core` (info/warning/debug); debug gated by the `debug` input
+- Prompts on disk, loaded via `src/prompts/loader.ts` (`{{var}}` substitution throws on unresolved placeholders)
+- File content sent to AI always via `addLineNumbers()` (`src/utils/text.ts`)
 
 ## Common Tasks
 
-### Adding a New Review Agent
-1. Create `src/agents/my-agent.agent.ts` extending `BaseAgent`
-2. Set `name`, `category`, `displayName`, `icon`
-3. Add category to `ReviewCategory` type in `src/types.ts`
-4. Add agent label in `src/github/pr-commenter.ts` AGENT_LABELS
-5. Create `prompts/my-agent.md` with review rules + JSON response format
-6. Register in `src/agents/index.ts` createAgents()
-7. Add to profiles in `src/config/profiles.ts` (profiles use `SpecialistCategory` — `comprehensive` is excluded and selected only via `review_mode: combined`)
-8. Add `enable_my_agent_review` input in `action.yml`
-9. Add toggle mapping in `src/config/action-inputs.ts`
-10. Add the category to `prompts/comprehensive.md` so combined mode covers it too
+### Add or change an action input
+1. Edit `src/config/schema.ts` (one `InputSpec` entry).
+2. `npm run gen:action` and commit the regenerated `action.yml`.
+3. Read the value in `src/config/inputs.ts` → `ActionConfig`.
 
-### Adding a New AI Provider
-1. Create `src/providers/my-provider.ts` implementing `AIProvider`
-2. Add to `src/providers/provider-factory.ts`
+### Add a new specialist agent
+1. Add the category (id/label/icon) to `CATEGORIES` in `src/config/taxonomy.ts`.
+2. Create `prompts/<category>.md` (findings JSON contract, ONE FINDING PER VIOLATION).
+3. Add the category to profiles in `src/config/profiles.ts`.
+4. Cover it in `prompts/comprehensive.md` for combined mode.
+Everything else (agent instance, `enable_*_review` toggle, labels, validation) derives automatically.
 
-### Modifying Agent Prompts
-Edit the corresponding `prompts/*.md` file. Key rules:
-- Response format must be JSON with `findings[]`, `summary`, `score`
-- Each finding needs: `severity`, `category`, `file`, `line`, `title`, `description`
-- `code_suggestion` must preserve exact original indentation
-- Include "ONE FINDING PER VIOLATION" instruction
-- Framework additions (`angular-additions.md`, `loopback4-additions.md`) are auto-appended
+### Add a new AI provider dialect
+1. Subclass `BaseProvider` (`src/providers/base-provider.ts`): implement `streamOnce`, `probe`, `listModels`, `curlHint`, and the error classifiers.
+2. Add the enum value to the `ai_provider` input in `schema.ts` (+ `gen:action`).
+3. Add the case in `src/providers/provider-factory.ts`.
 
-### Modifying the Mermaid Diagram Generation
-- **Import-based diagrams:** `src/results/diagram-generator.ts`
-- **AI-generated PR description diagrams:** `buildDescriptionPrompt()` in `src/orchestrator.ts`
-- **Mermaid sanitizer:** `sanitizeMermaid()` in `src/orchestrator.ts` — auto-quotes labels with special chars
+### Modify agent prompts
+Edit `prompts/*.md` (review criteria) or `prompts/system/*.md` (meta-prompts: output contract, consolidation, PR description, mermaid, reply verdicts). Response format must be JSON with `findings[]`, `summary`, `score`; each finding needs `severity`, `category`, `file`, `line`, `title`, `description`; `code_suggestion` must preserve exact original indentation.
+
+### Modify Mermaid handling
+- Sanitizer + Kroki validation: `src/utils/mermaid.ts`
+- AI diagram generation: `src/results/image-diagram-generator.ts` + `prompts/system/mermaid-diagrams.md` / `mermaid-fix.md`
+- Import-based architecture diagram: `src/results/diagram-generator.ts`
 
 ## Testing
 
-Test directories exist at `tests/` but are empty. When adding tests:
-- Use Jest + ts-jest (already configured in devDependencies)
-- Unit tests: `tests/unit/agents/`, `tests/unit/github/`, `tests/unit/providers/`
-- Fixtures: `tests/fixtures/sample-diffs/`, `tests/fixtures/sample-responses/`
-- Priority test targets: `deduplicator.ts`, `diff-parser.ts`, `sanitizeMermaid()`, `consolidation-agent.ts`
+Jest + ts-jest (`jest.config.js`, tests in `tests/unit/`, `tests/integration/`, fixtures in `tests/fixtures/factory.ts`). Formatter output is snapshot-locked — a rendering change shows up as a snapshot diff; review it before `jest -u`.
 
 ## Secrets (Org-Level)
 
-This action uses the same org-level secrets as `sourcefuse/ai-test-quality-analyzer`:
+Same org-level secrets as `sourcefuse/ai-test-quality-analyzer`:
 - `ANTHROPIC_AUTH_TOKEN` — AI provider API key
 - `ANTHROPIC_BASE_URL` — AI provider endpoint
 - `JIRA_URL`, `JIRA_EMAIL`, `JIRA_TOKEN` — JIRA integration (optional)
-- `GITHUB_TOKEN` — Provided automatically by GitHub Actions
+- `GITHUB_TOKEN` — provided automatically by GitHub Actions
 
 ## Things NOT To Do
 
+- Do NOT edit `action.yml` by hand — it is generated from `src/config/schema.ts`
 - Do NOT delete PR comments — always minimize or resolve
 - Do NOT show per-agent finding counts during progress — only after consolidation
 - Do NOT flag intentional configuration choices (fail_on_critical, debug, review_profile)
 - Do NOT flag standard GitHub Actions boilerplate (permissions, concurrency, if-guards)
-- Do NOT use `position` in GitHub Review API — use `line` + `side: 'RIGHT'`
-- Do NOT send file content without line numbers — always use `addLineNumbers()`
-- Do NOT throw plain `Error` — use typed errors or graceful fallbacks
+- Do NOT use `position` in the GitHub Review API — use `line` + `side: 'RIGHT'`
+- Do NOT send file content without line numbers — always `addLineNumbers()`
+- Do NOT log secret values — schema-marked secrets are masked; log presence only

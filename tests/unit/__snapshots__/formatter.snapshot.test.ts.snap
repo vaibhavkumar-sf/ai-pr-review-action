@@ -1,0 +1,220 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`formatReviewComment snapshot renders a passing zero-findings comment in separate mode 1`] = `
+"## AI Code Review
+
+> **Model:** \`glm-5.2\` | **Mode:** \`separate\` | **Profile:** \`standard\` | **Duration:** 2m 34s
+
+### Summary
+
+| Severity | Count |
+|----------|-------|
+| 🛑 Critical | 0 |
+| 🔴 High | 0 |
+| 🟡 Medium | 0 |
+| 🟢 Low | 0 |
+| 💬 Nit | 0 |
+| **Total** | **0** |
+
+> ✅ **Review passed** — no findings above the configured threshold.
+
+<details>
+<summary><strong>Agent Results</strong></summary>
+
+| Agent | Score | Findings | Duration | Status |
+|-------|-------|----------|----------|--------|
+| security | 9/10 | 0 | 2m 34s | ✅ Complete |
+| testing | N/A | 0 | 2m 34s | ❌ Failed |
+
+**security:** Solid change overall.
+
+</details>
+
+<details>
+<summary><strong>Architecture Diagram</strong></summary>
+
+\`\`\`mermaid
+graph TD
+    f0["src/service/user.service.ts"]
+    f1[["src/service/user.repo.ts"]]
+    f0 --> f1
+    style f0 fill:#fff3cd,stroke:#ffc107,color:#000
+    style f1 fill:#d4edda,stroke:#28a745,color:#000
+\`\`\`
+
+</details>
+
+<details>
+<summary><strong>Strengths</strong></summary>
+
+- **security** (9/10): Solid change overall.
+
+</details>
+
+---
+Custom footer
+
+---
+<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>
+"
+`;
+
+exports[`formatReviewComment snapshot renders the full summary comment for a combined-mode run 1`] = `
+"## AI Code Review
+
+> **Model:** \`glm-5.2\` | **Mode:** \`combined\` | **Duration:** 2m 34s
+
+### Summary
+
+| Severity | Count |
+|----------|-------|
+| 🛑 Critical | 0 |
+| 🔴 High | 1 |
+| 🟡 Medium | 1 |
+| 🟢 Low | 0 |
+| 💬 Nit | 1 |
+| **Total** | **3** |
+
+### Findings by Category
+
+| Category | Count |
+|----------|-------|
+| 🔒 Security | 1 |
+| 📝 Code Quality | 1 |
+| 🧪 Testing | 1 |
+
+> ✅ **Review passed** — no findings above the configured threshold.
+
+### Critical & High Issues
+
+| Severity | File | Title | Description |
+|----------|------|-------|-------------|
+| 🔴 High | \`src/service/user.service.ts:2\` | Missing input validation | The id parameter is not validated before use. |
+
+<details>
+<summary><strong>All Findings (3)</strong></summary>
+
+#### 🔴 High: Missing input validation
+\`src/service/user.service.ts:2\`
+
+The id parameter is not validated before use.
+
+> **Suggestion:** Validate the id parameter.
+
+---
+
+#### 🟡 Medium: Inline return type
+\`src/service/user.service.ts:3\`
+
+Extract the inline return type to a named interface.
+
+> **Suggestion:** Validate the id parameter.
+
+\`\`\`suggestion
+  getUser(id: string): UserDto {
+\`\`\`
+
+---
+
+#### 💬 Nit: Missing test for repo
+\`src/service/user.repo.ts:1\`
+
+No unit test covers UserRepo.
+
+---
+
+</details>
+
+<details>
+<summary><strong>JIRA Context</strong></summary>
+
+- **Ticket:** [TEL-101](https://jira.example.test/browse/TEL-101)
+- **Summary:** User CRUD endpoints
+- **Status:** In Progress
+- **Type:** Story
+- **Priority:** High
+
+**Acceptance Criteria:**
+- endpoints exist
+
+</details>
+
+<details>
+<summary><strong>Agent Results</strong></summary>
+
+| Agent | Score | Findings | Duration | Status |
+|-------|-------|----------|----------|--------|
+| comprehensive | 8/10 | 3 | 2m 34s | ✅ Complete |
+
+**comprehensive:** Solid change overall.
+
+</details>
+
+<details>
+<summary><strong>Architecture Diagram</strong></summary>
+
+\`\`\`mermaid
+graph TD
+    f0["src/service/user.service.ts"]
+    f1[["src/service/user.repo.ts"]]
+    f0 --> f1
+    style f0 fill:#fff3cd,stroke:#ffc107,color:#000
+    style f1 fill:#d4edda,stroke:#28a745,color:#000
+\`\`\`
+
+</details>
+
+<details>
+<summary><strong>Strengths</strong></summary>
+
+- **comprehensive** (8/10): Solid change overall.
+
+</details>
+
+---
+<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>
+"
+`;
+
+exports[`formatTrackingMetrics snapshot renders the tracking metrics section 1`] = `
+"
+### 📊 Backstage Tracking Metrics
+
+#### Findings by Severity — 3 total
+
+| Severity | Count |
+|----------|-------|
+| 🛑 Critical | 0 |
+| 🔴 High | 1 |
+| 🟡 Medium | 1 |
+| 🟢 Low | 0 |
+| 💬 Nit | 1 |
+| **Total** | **3** |
+
+#### Findings by Category — 3 total
+
+| Category | Count |
+|----------|-------|
+| 🔒 Security | 1 |
+| 📝 Code Quality | 1 |
+| ⚡ Performance | 0 |
+| 🔍 Type Safety | 0 |
+| 🏗️ Architecture | 0 |
+| 🧪 Testing | 1 |
+| 🔌 API Design | 0 |
+| **Total** | **3** |
+
+#### Review Activity (this run)
+
+| Activity | Count |
+|----------|-------|
+| 🆕 New inline comments (this run) | 3 |
+| ♻️ Carried-over comments (already posted) | 1 |
+| ✅ Threads resolved (fixed in code) | 2 |
+| 💬 Replies posted (to human replies) | 1 |
+| ☑️ Threads resolved from valid replies | 1 |
+| 🤖 Bot comments hidden | 4 |
+
+<sub>Reported to the Backstage tracker — each review run is stored as a separate row, so re-reviews of this PR are tracked individually.</sub>
+"
+`;
