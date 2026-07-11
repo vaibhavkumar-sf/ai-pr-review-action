@@ -370,6 +370,9 @@ async function gatherRelatedFiles(
     }
     const breakdown = [...reasonCounts.entries()].map(([reason, n]) => `${reason} ${n}`).join(', ');
     core.info(`Related context: ${results.length} file(s) (${breakdown})`);
+    for (const dep of results) {
+      core.info(`  + ${dep.filename} (${dep.reason ?? 'imported'})`);
+    }
   }
 
   return results;
