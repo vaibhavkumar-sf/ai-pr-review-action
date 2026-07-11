@@ -1,593 +1,266 @@
-# AI PR Review Action — Architecture Document
+# Architecture
 
-## 1. Overview
+AI PR Review Action — a Docker-based GitHub Action that reviews pull requests
+with one or more AI agents, posts a structured summary comment plus inline
+annotations, maintains review threads across runs, and optionally reports
+telemetry to a Backstage tracker.
 
-**`sourcefuse/ai-pr-review-action`** is a GitHub Action that performs comprehensive, AI-powered code reviews on pull requests. It reviews every quality dimension and merges the findings into a single, structured PR comment with inline code annotations.
+This document is the map of how the codebase is organized, the rules that keep
+it consistent, and the recipes for extending it. The plan that produced this
+architecture is preserved in [refactor-plan.md](refactor-plan.md).
 
-### Review Modes (`review_mode` input)
+## Design principles
 
-- **`combined` (default)** — a single `ComprehensiveAgent` reviews all dimensions at once using `prompts/comprehensive.md`. The model tags each finding with its own category (`security`, `performance`, …), preserved by `ComprehensiveAgent.resolveCategory()`. Because there is only one agent, the AI consolidation pass is skipped (programmatic dedup still runs), and the agent floors `max_tokens` at 16384 so the large findings JSON is never truncated.
-- **`separate`** — the original architecture: parallel specialist review agents selected by `review_profile`/toggles, each focused on one dimension, followed by programmatic dedup + an AI consolidation pass.
+1. **Single source of truth for everything.** Every input, default, tunable,
+   severity, category, and prompt lives in exactly one place. Derived artifacts
+   (`action.yml`, icon maps, agent lists) are generated or computed from the
+   source, never hand-maintained in parallel.
+2. **Fail-safe by policy, not by accident.** Every pipeline phase is declared
+   `critical` or best-effort. A best-effort failure warns and continues; only a
+   critical failure can fail the run — and even then the failure is reported
+   (comment + outputs + Backstage) before the action exits.
+3. **Provider-agnostic core.** The review pipeline talks to an `AIProvider`
+   interface. Dialect-specific code (Anthropic SDK vs OpenAI-compatible HTTP)
+   is confined to thin adapters under `src/providers/`.
+4. **Minimum code.** Shared logic exists once (`utils/`, `github/threads.ts`,
+   `config/taxonomy.ts`); data-driven constructs replace boilerplate (one
+   `specialists.ts` instead of seven agent stub files).
 
-Both modes share the same downstream pipeline: merge → summary comment (severity + category tables) → inline comments (critical/high/medium, never on unit test files) → Mermaid diagrams in the PR description → optional Backstage report (`src/results/backstage-reporter.ts`, see `docs/backstage-integration.md`).
+## Module map
 
-### Key Design Principles
-
-- **Fault-tolerant**: No optional feature failure (JIRA, CLAUDE.md, individual agent) crashes the action
-- **Highly configurable**: Profiles + individual toggles + prompt overrides at every level
-- **Provider-agnostic**: Works with Anthropic, OpenRouter, GLM, or any Anthropic-compatible API
-- **Drop-in simplicity**: 3 lines of config for a full review; sensible defaults for everything else
-- **Company-wide standard**: Designed for org-level adoption across Angular & LoopBack4 projects
-
----
-
-## 2. High-Level Architecture
-
-```mermaid
-flowchart TD
-    subgraph "GitHub"
-        PR["Pull Request<br/>(opened/synchronize)"]
-        GHA["GitHub Actions<br/>Runner"]
-        API["GitHub REST API<br/>(PR, Comments, Reviews)"]
-    end
-
-    subgraph "ai-pr-review-action (Docker)"
-        ENTRY["index.ts<br/>Entry Point"]
-        CONFIG["Config Parser<br/>action-inputs.ts"]
-        ORCH["Orchestrator<br/>orchestrator.ts"]
-        
-        subgraph "Context Gathering"
-            PRC["PR Context<br/>pr-context.ts"]
-            JIRA["JIRA Context<br/>jira-context.ts"]
-            REPO["Repo Context<br/>repo-context.ts"]
-        end
-
-        subgraph "Parallel Review Agents"
-            SEC["Security<br/>Agent"]
-            CQ["Code Quality<br/>Agent"]
-            PERF["Performance<br/>Agent"]
-            TS["Type Safety<br/>Agent"]
-            ARCH["Architecture<br/>Agent"]
-            TEST["Testing<br/>Agent"]
-            APID["API Design<br/>Agent"]
-        end
-
-        subgraph "AI Provider Layer"
-            PROV["Provider Factory"]
-            ANTH["Anthropic Provider<br/>(compatible with OpenRouter,<br/>GLM, etc.)"]
-        end
-
-        subgraph "Results Processing"
-            MERGE["Merger"]
-            DEDUP["Deduplicator"]
-            FMT["Formatter"]
-            DIAG["Diagram Generator"]
-        end
-
-        subgraph "GitHub Integration"
-            CMNT["PR Commenter<br/>(fixed comment)"]
-            INLINE["Inline Reviewer<br/>(line comments)"]
-            DIFF["Diff Parser"]
-        end
-    end
-
-    subgraph "External Services"
-        AIAPI["AI API<br/>(Anthropic / OpenRouter / GLM)"]
-        JIRAAPI["JIRA REST API<br/>(optional)"]
-    end
-
-    PR -->|triggers| GHA
-    GHA -->|runs| ENTRY
-    ENTRY --> CONFIG --> ORCH
-
-    ORCH --> PRC
-    ORCH --> JIRA
-    ORCH --> REPO
-
-    PRC -->|fetch diff, files| API
-    JIRA -->|fetch ticket| JIRAAPI
-    REPO -->|read CLAUDE.md| API
-
-    ORCH -->|dispatch| SEC & CQ & PERF & TS & ARCH & TEST & APID
-    SEC & CQ & PERF & TS & ARCH & TEST & APID -->|call| PROV
-    PROV --> ANTH --> AIAPI
-
-    SEC & CQ & PERF & TS & ARCH & TEST & APID -->|findings| MERGE
-    MERGE --> DEDUP --> FMT
-    FMT --> DIAG
-
-    FMT -->|summary| CMNT -->|update comment| API
-    FMT -->|inline findings| INLINE -->|post review| API
-    DIFF -->|line mapping| INLINE
+```
+action.yml                  GENERATED — do not edit by hand (see Config SSOT)
+scripts/gen-action.ts       renders action.yml from the schema; --check mode in prebuild/CI
+prompts/                    review-criteria prompts (agent behavior)
+prompts/system/             meta-prompts (global rules, user contract, consolidation,
+                            pr-description, mermaid, mermaid-fix, reply-verdict, json-repair)
+src/
+  index.ts                  entry: parse inputs → set debug → runReview → setFailed
+  types.ts                  shared interfaces (Severity/ReviewCategory re-exported from taxonomy)
+  pipeline/
+    orchestrator.ts         the review flow as a list of runPhase() calls
+    phase.ts                runPhase(name, {critical}, fn, fallback) — grouping, timing, fail-safety
+    description-updater.ts  AI PR description + diagrams appended below ----AI-description----
+  config/
+    schema.ts               INPUT REGISTRY — the SSOT for every action input
+    inputs.ts               env → typed ActionConfig; batched validation; secret masking
+    limits.ts               every tunable, named, with a one-line rationale
+    taxonomy.ts             severities/categories SSOT; all maps derived; coerceFinding()
+    patterns.ts             exclude / test-file / bot-hide patterns
+    profiles.ts             strict/standard/minimal → enabled specialist set
+  prompts/loader.ts         loadPrompt(name, vars): 3-path lookup, {{var}} substitution, cache
+  agents/
+    base-agent.ts           template method: build prompts → call provider → parse findings
+    specialists.ts          the 7 specialist agents, data-driven from taxonomy
+    comprehensive.agent.ts  combined-mode single agent (per-finding categories)
+  providers/
+    ai-provider.ts          the interface the pipeline depends on
+    base-provider.ts        shared engine: model-chain fallback+latching, retry/backoff,
+                            streaming heartbeat, timeouts, thinking-unsupported fallback
+    anthropic.provider.ts   Anthropic SDK dialect (default)
+    openai.provider.ts      OpenAI-compatible dialect (raw fetch + SSE)
+    provider-factory.ts     dialect switch on the ai_provider input
+  github/
+    pr-commenter.ts         summary comment lifecycle, bot cleanup, stale-thread resolve
+    inline-reviewer.ts      inline review comments (line + side: RIGHT)
+    reply-handler.ts        AI verdict on human replies; justification + resolve
+    threads.ts              the ONE GraphQL reviewThreads module (fetch/resolve/minimize)
+    diff-parser.ts          unified-diff parsing, line→position mapping
+  context/
+    pr-context.ts           diff, changed files, dependency files
+    repo-context.ts         framework detection, CLAUDE.md
+    jira-context.ts         optional JIRA enrichment (fault-tolerant)
+  results/
+    deduplicator.ts         programmatic dedup (proximity + Levenshtein/Jaccard)
+    consolidation-agent.ts  AI semantic dedup (separate mode)
+    merger.ts               severity counts, pass/fail decision
+    formatter.ts            findings → summary-comment markdown (snapshot-locked)
+    image-diagram-generator.ts  AI Mermaid diagrams for the PR description
+    backstage-reporter.ts   telemetry POST (success / skipped / failed)
+  utils/
+    logger.ts               debug gating + writeJobSummary (feature code logs via @actions/core)
+    json.ts                 extractJsonObject
+    mermaid.ts              the ONE sanitizer + Kroki validation
+    imports.ts              the ONE relative-import extractor
+    text.ts                 addLineNumbers
+tests/
+  unit/ integration/ fixtures/
 ```
 
----
+## Config SSOT — the generated action.yml
 
-## 3. Execution Flow
+The historical failure mode of this action: a default changed in code but not in
+`action.yml` (or vice versa). Docker actions always populate `INPUT_*` env vars
+from action.yml defaults, so **action.yml silently wins** — code defaults are
+unreachable. This shipped two production bugs.
 
-```mermaid
-sequenceDiagram
-    participant GH as GitHub Actions
-    participant Entry as index.ts
-    participant Config as Config Parser
-    participant Orch as Orchestrator
-    participant PR as PR Context
-    participant JIRA as JIRA Context
-    participant Repo as Repo Context
-    participant Comment as PR Commenter
-    participant Agents as Review Agents (parallel)
-    participant AI as AI Provider
-    participant Merger as Result Merger
-    participant Inline as Inline Reviewer
+The fix is structural:
 
-    GH->>Entry: Action triggered (PR event)
-    Entry->>Config: Parse & validate inputs
-    Config-->>Orch: ActionConfig
-
-    Note over Orch: Phase 1: Initialize
-    Orch->>Comment: Post "⏳ Review starting..." comment
-    Comment-->>Orch: comment_id (for updates)
-
-    Note over Orch: Phase 2: Gather Context
-    par Parallel Context Gathering
-        Orch->>PR: Fetch PR diff + changed files
-        PR-->>Orch: PullRequestContext
-    and
-        Orch->>JIRA: Fetch ticket details (optional)
-        JIRA-->>Orch: JiraContext | null (fault-tolerant)
-    and
-        Orch->>Repo: Read CLAUDE.md + detect framework
-        Repo-->>Orch: RepoContext
-    end
-
-    Orch->>Comment: Update "📥 Context gathered, reviewing..."
-
-    Note over Orch: Phase 3: Dispatch Agents
-    par Promise.allSettled()
-        Orch->>Agents: Security Agent
-        Agents->>AI: Chat with security prompt + context
-        AI-->>Agents: SecurityFindings[]
-    and
-        Orch->>Agents: Code Quality Agent
-        Agents->>AI: Chat with quality prompt + context
-        AI-->>Agents: QualityFindings[]
-    and
-        Orch->>Agents: Performance Agent
-        Agents->>AI: Chat with perf prompt + context
-        AI-->>Agents: PerfFindings[]
-    and
-        Orch->>Agents: Type Safety Agent
-        Agents->>AI: Chat with types prompt + context
-        AI-->>Agents: TypeFindings[]
-    and
-        Orch->>Agents: Architecture Agent
-        Agents->>AI: Chat with arch prompt + context
-        AI-->>Agents: ArchFindings[]
-    and
-        Orch->>Agents: Testing Agent
-        Agents->>AI: Chat with testing prompt + context
-        AI-->>Agents: TestFindings[]
-    and
-        Orch->>Agents: API Design Agent
-        Agents->>AI: Chat with api prompt + context
-        AI-->>Agents: ApiFindings[]
-    end
-
-    Note over Orch: Phase 4: Merge & Post
-    Agents-->>Merger: All findings
-    Merger->>Merger: Deduplicate + sort by severity
-    Merger-->>Orch: MergedReviewResult
-
-    par Post Results
-        Orch->>Comment: Update with final summary table
-    and
-        Orch->>Inline: Post inline review comments
-        Inline->>Inline: Map findings to diff line numbers
-        Inline-->>GH: GitHub Review with inline comments
-    end
-
-    Note over Entry: Exit with configured status
-    alt fail_on_critical=true AND critical findings exist
-        Entry-->>GH: Exit code 1 (fail)
-    else
-        Entry-->>GH: Exit code 0 (success)
-    end
+```
+src/config/schema.ts  ──(npm run gen:action)──▶  action.yml (inputs + runs.env)
+        │
+        └─(npm run check:action, wired into prebuild)──▶ build fails on drift
 ```
 
----
+- `schema.ts` holds one `InputSpec` per input: name, type, default, description,
+  group, `required`, `secret`, enum `values`.
+- `scripts/gen-action.ts` renders the `inputs:` block (grouped, commented) and a
+  `runs.env` entry `INPUT_<UPPER>: ${{ inputs.<name> }}` for **every** input —
+  a forgotten env line (the `enable_diagrams` bug) can no longer happen.
+- `inputs.ts` parses env → `ActionConfig`: masks `secret: true` values with
+  `core.setSecret` **before** anything can log them, collects all validation
+  errors into one batched Error, and falls back to schema defaults on malformed
+  optional values (warn, don't crash).
 
-## 4. Component Details
+**Rule: to add/change an input, edit `schema.ts` and run `npm run gen:action`.
+Never edit `action.yml`.**
 
-### 4.1 Config Parser (`src/config/action-inputs.ts`)
+## Tunables and taxonomy
 
-Reads all action inputs and produces a validated `ActionConfig` object.
+- `src/config/limits.ts` — every numeric/behavioral constant (token budgets,
+  timeouts, retry schedules, truncation stages, dedup thresholds, page sizes),
+  each named with a rationale comment. No magic numbers in feature code.
+- `src/config/taxonomy.ts` — `SEVERITIES` and `CATEGORIES` as `const` arrays;
+  the `Severity`/`ReviewCategory` types and every icon/label/tag/rank map,
+  agent label, and validation set are **derived** from them. `coerceFinding()`
+  is the single normalizer for AI-returned findings (alias handling, severity/
+  category coercion). Adding a severity or category is a one-array-entry change.
 
-```mermaid
-flowchart LR
-    subgraph "Input Sources"
-        ENV["Environment Variables<br/>(INPUT_*)"]
-        PROFILE["Review Profile<br/>(strict/standard/minimal)"]
-        TOGGLES["Individual Toggles<br/>(enable_*_review)"]
-    end
+## Prompt architecture
 
-    subgraph "Config Parser"
-        PARSE["Parse Inputs"]
-        VALIDATE["Validate Required"]
-        RESOLVE["Resolve Profile<br/>+ Overrides"]
-    end
+Two layers, both on disk, both shipped in the Docker image (`COPY prompts/`):
 
-    subgraph "Output"
-        CONFIG["ActionConfig"]
-    end
+| Layer | Location | Purpose |
+|---|---|---|
+| Review criteria | `prompts/*.md` | what each agent looks for (per-agent + framework additions) |
+| Meta-prompts | `prompts/system/*.md` | output contract, consolidation, PR description, mermaid generation/fix, reply verdicts, JSON repair |
 
-    ENV --> PARSE --> VALIDATE --> RESOLVE --> CONFIG
+`src/prompts/loader.ts` resolves prompts from `/app/prompts` (Docker), then
+`cwd/prompts`, then relative to the compiled module; substitutes `{{var}}`
+placeholders (throws on unresolved — fail loud); caches file reads.
+`loadPrompt` strips exactly one trailing newline; `loadPromptOrEmpty` is
+verbatim and returns `''` with a warning when the file is missing (used for
+optional framework additions).
+
+## Provider abstraction
+
+```
+pipeline ──▶ AIProvider (interface)
+                 ▲
+          BaseProvider (shared reliability engine)
+           ▲                    ▲
+ AnthropicProvider        OpenAIProvider
+   (SDK dialect)         (fetch + SSE dialect)
 ```
 
-**Profile Resolution Logic:**
+`BaseProvider` owns the hard-won reliability logic, shared by every dialect:
 
-| Profile | Security | Quality | Performance | Types | Architecture | Testing | API Design |
-|---------|----------|---------|-------------|-------|-------------|---------|------------|
-| strict  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| standard | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| minimal | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+- **Model-chain fallback + latching**: `anthropic_model` may be a comma-separated
+  chain; unknown-model errors advance to the next entry; the first working model
+  is latched for the rest of the run (`getResolvedModel()`).
+- **Retry/backoff**: rate-limits honor `Retry-After` (else 30s steps); transient
+  errors (429/500/502/503/529, network) use exponential backoff; timeouts are
+  terminal (a 10-minute agent call should not silently double).
+- **Streaming heartbeat**: progress logged every 20s so long calls are visibly alive.
+- **Thinking-unsupported fallback**: one-shot retry without extended thinking if
+  the endpoint rejects it.
+- **Pre-flight** (`verifyConnection`): a tiny probe with a 45s timeout and a
+  curl reproduction hint on failure.
 
-Individual toggles (`enable_*_review`) override the profile setting for that dimension.
+Dialects implement only: `streamOnce`, `probe`, `listModels`, `curlHint`, and
+the error classifiers. The `ai_provider` input selects the dialect:
 
-### 4.2 Context Gathering
+| `ai_provider` | Wire protocol | Thinking support | Notes |
+|---|---|---|---|
+| `anthropic` (default) | Anthropic Messages SDK | `thinking.budget_tokens`; temperature forced to 1 while thinking | identical behavior to pre-refactor consumers |
+| `openai` | raw `fetch` SSE to `/chat/completions` | `delta.reasoning_content`/`reasoning` observed; vendor `thinking` extension sent best-effort, stripped on rejection | works with any OpenAI-compatible endpoint (z.ai coding API, OpenRouter, vLLM, …) |
 
-```mermaid
-flowchart TD
-    subgraph "PR Context"
-        DIFF["Fetch PR Diff"]
-        FILES["Fetch Changed File Contents"]
-        META["Fetch PR Metadata<br/>(title, body, author, base/head)"]
-    end
+`anthropic_base_url` / `anthropic_auth_token` / `anthropic_model` apply to
+whichever dialect is selected (names kept for backward compatibility).
 
-    subgraph "JIRA Context (Fault-Tolerant)"
-        EXTRACT["Extract Ticket ID<br/>from branch name or PR title"]
-        FETCH["Fetch JIRA Ticket Details"]
-        FALLBACK["On Error: Log Warning<br/>Continue with null context"]
-    end
+## Pipeline and fail-safety
 
-    subgraph "Repo Context"
-        CLAUDE["Read CLAUDE.md<br/>from repo root"]
-        DETECT["Auto-detect Framework<br/>(angular.json → Angular,<br/>@loopback/core → LoopBack4)"]
-    end
+`src/pipeline/orchestrator.ts` is a flat list of `runPhase()` calls. Each phase
+gets a `::group::`-wrapped log section with duration and a declared criticality:
 
-    DIFF --> FILES --> META
-    EXTRACT --> FETCH --> FALLBACK
-    CLAUDE --> DETECT
-```
+| Phase | Criticality | On failure |
+|---|---|---|
+| Startup (initial comment, bot cleanup) | best-effort | warn, continue |
+| AI pre-flight | gate | error comment, outputs `review_status=failed` + `skip_reason=ai_unreachable`, Backstage `failed`, setFailed |
+| Context gathering | critical | failure comment, Backstage `failed`, rethrow |
+| Guards (file count, no agents enabled) | gate | outputs `skipped` + `skip_reason`, Backstage `skipped`, clean exit |
+| Review agents | critical | rethrow (individual agent failures inside are tolerated via `Promise.allSettled`) |
+| Consolidation + merge | critical | rethrow (AI-consolidation failure inside falls back to programmatic dedup) |
+| Summary comment | critical | rethrow — a review nobody can see is a failed review |
+| Reply handling / inline comments / metrics / description / diagrams | best-effort | warn, continue |
+| Outputs, Backstage report, job summary | best-effort | warn, continue |
+| Fail threshold (`fail_on_critical` / `fail_on_high`) | — | setFailed by configuration |
 
-**JIRA Ticket ID Extraction** (from branch name or PR title):
-- Pattern: `([A-Z]{2,10}-\d+)` matches `PLM-1234`, `PROJ-567`, etc.
-- Sources checked in order: branch name → PR title → PR body
-- If not found: skip JIRA context silently
+A top-level catch in `runReview` guarantees Backstage receives a `failed` report
+(with the error reason) for any unhandled critical failure before the action exits.
 
-**Framework Auto-Detection:**
-1. Check for `angular.json` or `nx.json` with Angular projects → Angular
-2. Check `package.json` for `@loopback/core` dependency → LoopBack4
-3. Check both → apply both Angular and LoopBack4 prompts
-4. Neither found → use generic TypeScript/Node.js prompts
+## Observability standard
 
-### 4.3 Review Agents
+- **Grouped logs**: every phase logs `▶ Phase name` … `✓ completed in Ns` inside
+  a collapsible group.
+- **Secrets**: all `secret: true` inputs are masked via `core.setSecret` at parse
+  time — before any log line can leak them. The API key is never logged; only
+  its presence.
+- **Annotations**: degraded phases emit `core.warning`; hard failures `core.setFailed`.
+- **Job summary**: a final `GITHUB_STEP_SUMMARY` panel (verdict, severity counts,
+  model, mode, duration) — best-effort.
+- **Backstage telemetry**: every run reports when `post_data_url` is set —
+  success runs post full metrics + findings; skipped/failed runs post a minimal
+  payload with `status` and `skip_reason`. Fire-and-forget, 10s timeout, never
+  affects the run outcome.
 
-Each agent extends `BaseAgent` and has:
-- A specialized system prompt (from `prompts/` directory)
-- Framework-specific additions (Angular/LoopBack4) appended automatically
-- User overrides (system_prompt_append, framework-specific appends) applied last
-- CLAUDE.md content injected into context
+## Review flow (functional behavior)
 
-```mermaid
-classDiagram
-    class BaseAgent {
-        +name: string
-        +category: ReviewCategory
-        +systemPrompt: string
-        +review(context: ReviewContext): Promise~AgentResult~
-        #buildPrompt(context: ReviewContext): Message[]
-        #parseFindings(response: string): Finding[]
-    }
+1. Post/refresh the fixed progress comment; hide noisy bot comments.
+2. Pre-flight the AI endpoint (probe + model-chain resolution).
+3. Gather PR + JIRA + repo context in parallel.
+4. Run agents: `combined` mode = one ComprehensiveAgent covering every
+   dimension; `separate` mode = the profile/toggle-selected specialists in
+   parallel.
+5. Dedup programmatically → AI consolidation (separate mode) → merge counts.
+6. Replace the progress comment with the summary (findings + tracking-metrics
+   tables grouped by severity / category / activity; format snapshot-locked).
+7. Handle human replies (AI verdict vs current code → justification reply →
+   resolve valid ones); resolve stale threads; post new inline comments
+   (critical/high/medium, never on test files).
+8. Regenerate the AI PR description + Mermaid diagrams below
+   `----AI-description----` (user content above the separator is preserved).
+9. Set outputs, report to Backstage, write the job summary, apply the fail
+   threshold.
 
-    class SecurityAgent {
-        +name = "security"
-        +category = SECURITY
-    }
+## Extension guides
 
-    class CodeQualityAgent {
-        +name = "code-quality"
-        +category = CODE_QUALITY
-    }
+**Add an input** — one entry in `src/config/schema.ts`, run
+`npm run gen:action`, read it in `src/config/inputs.ts`. The build fails if you
+forget to regenerate.
 
-    class PerformanceAgent {
-        +name = "performance"
-        +category = PERFORMANCE
-    }
+**Add a specialist agent** — add the category to `CATEGORIES` in `taxonomy.ts`
+(label + icon), create `prompts/<category>.md`, add the category to the
+relevant profiles in `profiles.ts`, and cover it in `prompts/comprehensive.md`
+for combined mode. `specialists.ts`, the enable toggle, labels, and validation
+sets derive automatically.
 
-    class TypeSafetyAgent {
-        +name = "type-safety"
-        +category = TYPE_SAFETY
-    }
+**Add a provider dialect** — subclass `BaseProvider`, implement `streamOnce` +
+`probe` + `listModels` + `curlHint` + the error classifiers, add the enum value
+to the `ai_provider` input in `schema.ts` (+ regen), and add the case in
+`provider-factory.ts`.
 
-    class ArchitectureAgent {
-        +name = "architecture"
-        +category = ARCHITECTURE
-    }
+**Change a tunable** — edit `limits.ts`. If it should be user-configurable,
+promote it to an input in `schema.ts` instead.
 
-    class TestingAgent {
-        +name = "testing"
-        +category = TESTING
-    }
+**Change comment rendering** — edit `formatter.ts`; the snapshot tests in
+`tests/unit/formatter.snapshot.test.ts` show the exact before/after diff.
 
-    class ApiDesignAgent {
-        +name = "api-design"
-        +category = API_DESIGN
-    }
+## Testing
 
-    BaseAgent <|-- SecurityAgent
-    BaseAgent <|-- CodeQualityAgent
-    BaseAgent <|-- PerformanceAgent
-    BaseAgent <|-- TypeSafetyAgent
-    BaseAgent <|-- ArchitectureAgent
-    BaseAgent <|-- TestingAgent
-    BaseAgent <|-- ApiDesignAgent
-```
-
-**Agent Response Format** (structured JSON from AI):
-
-```json
-{
-  "findings": [
-    {
-      "severity": "critical|high|medium|low|nit",
-      "category": "security|quality|performance|...",
-      "file": "src/auth.service.ts",
-      "line": 42,
-      "title": "SQL injection vulnerability",
-      "description": "User input directly interpolated into SQL query",
-      "suggestion": "Use parameterized queries: `await this.db.execute($1, [userInput])`",
-      "code_suggestion": "const result = await this.db.execute('SELECT * FROM users WHERE id = $1', [userId]);"
-    }
-  ],
-  "summary": "Found 3 security issues: 1 critical SQL injection, ...",
-  "score": 6
-}
-```
-
-### 4.4 AI Provider Layer
-
-```mermaid
-flowchart LR
-    subgraph "Provider Factory"
-        FACTORY["createProvider(config)"]
-    end
-
-    subgraph "Anthropic Provider"
-        CLIENT["Anthropic SDK Client"]
-        RETRY["Retry Logic<br/>(3 retries, exponential backoff)"]
-        TIMEOUT["Timeout: 120s per call"]
-    end
-
-    subgraph "Compatible APIs"
-        A1["api.anthropic.com"]
-        A2["openrouter.ai/api/v1"]
-        A3["Custom GLM endpoint"]
-        A4["Any Anthropic-compatible"]
-    end
-
-    FACTORY --> CLIENT --> RETRY --> TIMEOUT
-    TIMEOUT --> A1 & A2 & A3 & A4
-```
-
-The provider uses the official `@anthropic-ai/sdk` with configurable `baseURL` — this automatically supports any Anthropic-compatible API.
-
-### 4.5 GitHub Integration
-
-**PR Commenter (Fixed Comment Pattern):**
-
-```mermaid
-stateDiagram-v2
-    [*] --> SearchExisting: Find comment with marker
-    SearchExisting --> CreateNew: Not found
-    SearchExisting --> UpdateExisting: Found
-    CreateNew --> CommentPosted
-    UpdateExisting --> CommentPosted
-    CommentPosted --> UpdateProgress: Agent completes
-    UpdateProgress --> UpdateProgress: More agents complete
-    UpdateProgress --> FinalUpdate: All agents done
-    FinalUpdate --> [*]
-```
-
-The comment contains a hidden HTML marker to identify it:
-```html
-<!-- ai-pr-review-action-comment -->
-```
-
-**Inline Review Comments:**
-
-Uses GitHub's Pull Request Review API to post inline comments on specific diff lines:
-1. Parse the PR diff to build a line-number-to-diff-position map
-2. For each finding with a file + line, look up the diff position
-3. If the line is within a diff hunk, post an inline comment
-4. If not in a diff hunk, include the finding in the summary comment only
-5. Submit all inline comments as a single review (not individual comments)
-
-### 4.6 Results Processing
-
-```mermaid
-flowchart TD
-    FINDINGS["Raw Findings<br/>from all agents"]
-    DEDUP["Deduplicator<br/>Remove findings on same file:line<br/>with similar description"]
-    SORT["Sort by Severity<br/>critical → high → medium → low → nit"]
-    GROUP["Group by Category<br/>for summary table"]
-    FORMAT["Format Markdown<br/>summary + severity table"]
-    MERMAID["Generate Mermaid Diagrams<br/>(if architecture findings exist)"]
-    
-    FINDINGS --> DEDUP --> SORT --> GROUP --> FORMAT --> MERMAID
-```
-
----
-
-## 5. Fault Tolerance Matrix
-
-```mermaid
-flowchart TD
-    subgraph "Fault Tolerance Strategy"
-        direction TB
-        
-        J["JIRA Fetch Fails"] -->|"log warning"| JR["Continue without<br/>JIRA context"]
-        C["CLAUDE.md Not Found"] -->|"silent skip"| CR["Continue without<br/>repo context"]
-        F["Framework Detection Fails"] -->|"default generic"| FR["Use TypeScript/Node.js<br/>prompts only"]
-        A["Single Agent Fails"] -->|"log error"| AR["Mark as failed in<br/>comment, continue others"]
-        AA["All Agents Fail"] -->|"post error comment"| AAR["Exit with warning<br/>(code 0)"]
-        L["Line Mapping Fails"] -->|"fallback"| LR["Include finding in<br/>summary table only"]
-        G["GitHub API Error"] -->|"retry 3x"| GR["Log to action output<br/>if all retries fail"]
-        AI["AI Rate Limit"] -->|"exponential backoff"| AIR["Retry up to 3 times<br/>per agent"]
-    end
-```
-
----
-
-## 6. Configuration Hierarchy
-
-```mermaid
-flowchart TD
-    subgraph "Priority (highest to lowest)"
-        P1["1. Action Inputs<br/>(workflow YAML)"]
-        P2["2. CLAUDE.md<br/>(from target repo)"]
-        P3["3. Review Profile<br/>(strict/standard/minimal)"]
-        P4["4. Built-in Defaults<br/>(hardcoded in action)"]
-    end
-
-    P1 --> P2 --> P3 --> P4
-
-    subgraph "Prompt Assembly"
-        BASE["Base System Prompt"]
-        AGENT["Agent-Specific Prompt"]
-        FW["Framework Prompt<br/>(Angular / LoopBack4)"]
-        CLAUDE_MD["CLAUDE.md Content"]
-        JIRA_CTX["JIRA Ticket Context"]
-        USER_APPEND["User system_prompt_append"]
-        FW_APPEND["User framework_prompt_append"]
-        
-        BASE --> AGENT --> FW --> CLAUDE_MD --> JIRA_CTX --> USER_APPEND --> FW_APPEND
-    end
-```
-
----
-
-## 7. Review Dimensions
-
-### Security Agent
-- OWASP Top 10 vulnerabilities
-- Injection attacks (SQL, NoSQL, command, XSS, template)
-- Hardcoded secrets/credentials
-- Authentication & authorization flaws
-- CSRF, CORS misconfiguration
-- Prototype pollution (Node.js specific)
-- Insecure deserialization
-- Sensitive data in logs
-- Missing input validation at boundaries
-- Dependency vulnerabilities (known CVE patterns)
-
-### Code Quality Agent
-- SOLID principles violations (SRP, OCP, LSP, ISP, DIP)
-- DRY violations (duplicated logic)
-- KISS violations (overcomplicated solutions)
-- Cyclomatic & cognitive complexity
-- Naming conventions and consistency
-- Dead code, unused imports
-- Magic numbers/strings
-- File size and function length
-- Error typing (HttpErrors vs plain Error)
-- Function parameter count (max 5)
-- Inline return types (enforce DTOs)
-- Code simplification opportunities
-
-### Performance Agent
-- N+1 query patterns
-- Memory leaks (event listeners, subscriptions, timers)
-- Blocking operations in async context
-- Missing pagination on collections
-- Unbounded loops
-- Redundant computations in hot paths
-- Missing caching opportunities
-- Large payloads without streaming
-- Observable/subscription cleanup (Angular)
-
-### Type Safety & Documentation Agent
-- Missing return types on functions
-- Missing parameter types (implicit `any`)
-- Loose types (`any`, `object`, `Function`)
-- Missing JSDoc/TSDoc on all functions
-- Missing `@param` and `@returns` documentation
-- Incorrect/outdated comments
-- Missing model & property descriptions (LoopBack4)
-- Inline response schemas (enforce DTOs)
-
-### Architecture Agent
-- Layering violations (controller ↔ repository direct access)
-- Dependency injection issues
-- Circular dependencies
-- Missing abstractions / over-abstraction
-- Separation of concerns violations
-- Configuration hardcoding
-- Angular: Change detection strategy, module structure, lazy loading
-- LoopBack4: Decorator usage, repository patterns, interceptors
-
-### Testing Agent
-- Missing test coverage for new code paths
-- Missing edge case tests (empty, null, boundary)
-- Mock quality (do mocks match real implementations?)
-- Test naming clarity
-- Async test handling
-- Snapshot test overuse
-- Test isolation (no interdependencies)
-
-### API Design Agent
-- HTTP method correctness
-- Status code appropriateness
-- URL naming conventions
-- Input validation at boundaries
-- Pagination implementation
-- Response format consistency
-- Breaking API changes
-- OpenAPI spec accuracy
-- Error response format
-
----
-
-## 8. Versioning Strategy
-
-- **Tags**: `v1.0.0`, `v1.1.0`, `v2.0.0` — semantic versioning
-- **Major tag**: `v1` — always points to latest v1.x.x (for consumer stability)
-- **Docker image**: Published to GHCR on each release tag
-- **Breaking changes**: Major version bump only
-
-Consumer usage: `sourcefuse/ai-pr-review-action@v1` — always gets latest v1.x patches.
-
----
-
-## 9. Technology Stack
-
-| Component | Technology |
-|-----------|------------|
-| Runtime | Node.js 20 (inside Docker) |
-| Language | TypeScript 5.x |
-| AI SDK | @anthropic-ai/sdk |
-| GitHub SDK | @actions/core, @actions/github, @octokit/rest |
-| HTTP Client | Built-in fetch (Node 20) |
-| Testing | Jest |
-| Linting | ESLint + typescript-eslint |
-| Container | Docker (Alpine-based Node 20) |
-| CI/CD | GitHub Actions |
-
----
-
-## 10. Security Considerations
-
-- **No secrets stored**: All credentials passed via action inputs (encrypted GitHub Secrets)
-- **Minimal permissions**: Only `contents: read` and `pull-requests: write` required
-- **No external data exfil**: Only communicates with configured AI API and GitHub API
-- **Diff-only context**: Only changed files sent to AI, not entire repo
-- **Token scoping**: GITHUB_TOKEN automatically scoped to the repo
+`npm test` (jest + ts-jest). Suites: taxonomy derivations, prompt loader,
+mermaid sanitizer, deduplicator thresholds, diff-parser, JSON extraction,
+formatter markdown snapshots, base-provider engine (fake subclass), OpenAI SSE
+parsing (mocked fetch), schema↔action.yml sync, input batch validation, and a
+stubbed full-pipeline integration test. `npm run ci` = build (includes
+`check:action`) + lint + test.
