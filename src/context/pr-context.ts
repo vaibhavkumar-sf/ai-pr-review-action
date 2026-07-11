@@ -4,6 +4,8 @@ import { minimatch } from 'minimatch';
 import { ActionConfig, ChangedFile, DependencyFile, DependencyReason, Framework } from '../types';
 import { extractImports, extractRelativeImports, resolveRelativeImport } from '../utils/imports';
 import {
+  BARREL_MAX_TARGETS,
+  BARREL_TARGETS_HARD_CAP,
   DEP_FILE_MAX_CHARS,
   GITHUB_PER_PAGE,
   MAX_DEP_FILES,
@@ -284,8 +286,11 @@ async function gatherRelatedFiles(
 
       if (/(^|\/)index\.[tj]s$/.test(resolved) && imp.symbols.length > 0) {
         const barrelContent = await fetchText(resolved);
+        // Target cap scales with the import's symbol count so a wide import
+        // ({ 15 services } from '../services') expands fully, within bounds.
+        const maxTargets = Math.min(Math.max(imp.symbols.length, BARREL_MAX_TARGETS), BARREL_TARGETS_HARD_CAP);
         const targets = barrelContent
-          ? resolveBarrelTargets(resolved, barrelContent, imp.symbols, tree).filter(
+          ? resolveBarrelTargets(resolved, barrelContent, imp.symbols, tree, maxTargets).filter(
               (t) => !changedPaths.has(t),
             )
           : [];
@@ -328,6 +333,13 @@ async function gatherRelatedFiles(
       if (queue) queue.push(candidate);
       else byReferencer.set(ref, [candidate]);
     }
+  }
+  // Within each file's queue, SPECIFIC dependencies come first (fewest other
+  // referencers, then kind weight via global rank): shared files (a package
+  // barrel everyone imports) will be placed by some file's later round anyway,
+  // while a file's unique dependency is exactly what its review needs.
+  for (const queue of byReferencer.values()) {
+    queue.sort((a, b) => a.referencedBy.size - b.referencedBy.size);
   }
   const referencerOrder = changedFiles.map((f) => f.filename).filter((f) => byReferencer.has(f));
 

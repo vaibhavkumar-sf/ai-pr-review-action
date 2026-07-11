@@ -194,8 +194,13 @@ export const WORKSPACE_PKG_FETCH_MAX = 8;
 /** Barrel (index.ts) re-export chains are followed at most this deep (visited set breaks cycles). */
 export const BARREL_FOLLOW_DEPTH = 2;
 
-/** Max re-export targets pulled in per barrel import (export-* heavy barrels would explode). */
+/** Minimum re-export targets resolvable per barrel import; the effective cap
+ *  scales up with the import's symbol count (see BARREL_TARGETS_HARD_CAP). */
 export const BARREL_MAX_TARGETS = 4;
+
+/** Absolute ceiling on targets expanded from one barrel import, however many
+ *  symbols it names (keeps an `import { …20 things }` from flooding candidates). */
+export const BARREL_TARGETS_HARD_CAP = 16;
 
 /** Ranking weight per related-file kind: types/models teach the reviewer the most per token. */
 export const RELATED_KIND_WEIGHT: Readonly<Record<string, number>> = {

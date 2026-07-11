@@ -150,6 +150,7 @@ export function resolveBarrelTargets(
   barrelContent: string,
   importedSymbols: string[],
   tree: RepoTree,
+  maxTargets = BARREL_MAX_TARGETS,
 ): string[] {
   const targets = new Set<string>();
   const wanted = new Set(importedSymbols);
@@ -181,10 +182,10 @@ export function resolveBarrelTargets(
         }
       }
     }
-    if (targets.size >= BARREL_MAX_TARGETS) break;
+    if (targets.size >= maxTargets) break;
   }
 
-  return Array.from(targets).slice(0, BARREL_MAX_TARGETS);
+  return Array.from(targets).slice(0, maxTargets);
 }
 
 /** Kind classification for ranking weights. */

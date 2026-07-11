@@ -172,6 +172,15 @@ describe('resolveBarrelTargets', () => {
     const barrel = `export * from './index';`;
     expect(resolveBarrelTargets('src/models/index.ts', barrel, ['Anything'], tree)).toEqual([]);
   });
+
+  it('expands wide imports fully when maxTargets scales with the symbol count', () => {
+    const wideTree = makeTree(Array.from({ length: 6 }, (_, i) => `src/svc/s${i}.service.ts`).concat('src/svc/index.ts'));
+    const barrel = Array.from({ length: 6 }, (_, i) => `export { S${i}Service } from './s${i}.service';`).join('\n');
+    const symbols = Array.from({ length: 6 }, (_, i) => `S${i}Service`);
+    expect(resolveBarrelTargets('src/svc/index.ts', barrel, symbols, wideTree, 6)).toHaveLength(6);
+    // default cap still limits to 4
+    expect(resolveBarrelTargets('src/svc/index.ts', barrel, symbols, wideTree)).toHaveLength(4);
+  });
 });
 
 describe('rankCandidates', () => {
