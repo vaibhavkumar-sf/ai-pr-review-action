@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import { ActionConfig, FailThreshold, Framework, ReviewMode, ReviewProfile } from '../types';
+import { ActionConfig, FailThreshold, Framework, RelatedContextMode, ReviewMode, ReviewProfile } from '../types';
 import { INPUTS, InputSpec } from './schema';
 import { ProfileMap, SpecialistCategory, getEnabledAgents } from './profiles';
 import { DEFAULT_EXCLUDE_PATTERNS } from './patterns';
@@ -197,6 +197,7 @@ export function parseActionInputs(): ActionConfig {
     // User patterns are APPENDED to the built-in defaults, never replacing them
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS, ...userExcludes],
     includePatterns: getCsv('include_patterns'),
+    relatedContext: getEnum<RelatedContextMode>('related_context'),
 
     // Diagrams
     enableDiagrams: getBoolean('enable_diagrams'),

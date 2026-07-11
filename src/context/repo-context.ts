@@ -79,9 +79,10 @@ export async function gatherRepoContext(
 /**
  * Detect frameworks from changed file patterns. This is the fastest check
  * and works even in monorepos where the root package.json doesn't list
- * framework dependencies.
+ * framework dependencies. Exported for related-context gathering, which runs
+ * before the authoritative repo-context detection.
  */
-function detectFromFilePatterns(
+export function detectFromFilePatterns(
   changedFiles: ChangedFile[],
 ): { angular: boolean; loopback4: boolean } {
   let angular = false;

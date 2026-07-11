@@ -40,6 +40,7 @@ export function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig 
     maxFilesToReview: 50,
     excludePatterns: [],
     includePatterns: [],
+    relatedContext: 'full',
     systemPromptOverride: '',
     systemPromptAppend: '',
     angularPromptAppend: '',

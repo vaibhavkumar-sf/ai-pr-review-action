@@ -6,6 +6,7 @@ export type ReviewProfile = 'strict' | 'standard' | 'minimal';
 export type ReviewMode = 'separate' | 'combined';
 export type Framework = 'angular' | 'loopback4' | 'both' | 'auto' | 'generic';
 export type FailThreshold = 'critical' | 'high' | 'medium';
+export type RelatedContextMode = 'full' | 'imports-only' | 'off';
 
 export interface Finding {
   severity: Severity;
@@ -45,10 +46,21 @@ export interface ReviewContext {
   framework: Framework;
 }
 
+/** Why an unchanged file was pulled in as review context. */
+export type DependencyReason =
+  | 'imported'
+  | 'template'
+  | 'stylesheet'
+  | 'di-binding'
+  | 'barrel-reexport'
+  | 'declaring-module';
+
 export interface DependencyFile {
   filename: string;
   content: string;
   referencedBy: string[];
+  /** Optional for back-compat; renderers default to 'imported'. */
+  reason?: DependencyReason;
 }
 
 export interface ChangedFile {
@@ -133,6 +145,7 @@ export interface ActionConfig {
   maxFilesToReview: number;
   excludePatterns: string[];
   includePatterns: string[];
+  relatedContext: RelatedContextMode;
 
   // Prompts
   systemPromptOverride: string;

@@ -247,6 +247,15 @@ export const INPUTS: readonly InputSpec[] = [
     group: 'Behavior Flags',
     description: 'Comma-separated glob patterns to include (if set, only these are reviewed)',
   },
+  {
+    name: 'related_context',
+    type: 'enum',
+    values: ['full', 'imports-only', 'off'],
+    default: 'full',
+    group: 'Behavior Flags',
+    description:
+      'How much unchanged-file context is fetched for the reviewer: full (import graph incl. tsconfig path aliases, npm-workspace packages and barrel re-exports, plus framework expansion — Angular sibling templates/styles/modules, LoopBack4 string-key DI bindings), imports-only (import graph only), off (none)',
+  },
 
   // ─── Prompt Customization ───
   {

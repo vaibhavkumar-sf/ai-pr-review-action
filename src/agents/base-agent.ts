@@ -1,5 +1,5 @@
 import { AIProvider, ChatMessage } from '../providers/ai-provider';
-import { ActionConfig, AgentResult, Finding, ReviewCategory, ReviewContext } from '../types';
+import { ActionConfig, AgentResult, DependencyReason, Finding, ReviewCategory, ReviewContext } from '../types';
 import { extractJsonObject } from '../utils/json';
 import { addLineNumbers } from '../utils/text';
 import { loadPrompt, loadPromptOrEmpty } from '../prompts/loader';
@@ -39,6 +39,16 @@ interface PromptTrimOptions {
   maxDiffChars: number;
   includeFileContents: boolean;
 }
+
+/** Human phrasing for why a related file is in the prompt (presentation only). */
+const REASON_LABEL: Record<DependencyReason, string> = {
+  imported: 'imported by',
+  template: 'template of',
+  stylesheet: 'stylesheet of',
+  'di-binding': 'DI binding injected by',
+  'barrel-reexport': 're-exported through a barrel imported by',
+  'declaring-module': 'declaring NgModule of',
+};
 
 export abstract class BaseAgent {
   abstract readonly name: string;
@@ -302,18 +312,20 @@ export abstract class BaseAgent {
       }
     }
 
-    // Include dependency files (imported by changed files, not changed themselves)
+    // Include related files (imported by / implied by changed files, not changed themselves)
     const depFiles = context.dependencyFiles
       ? context.dependencyFiles.slice(0, opts.maxDepFiles)
       : [];
     if (depFiles.length > 0) {
-      userPrompt += `## Referenced Dependency Files (not changed, for context only)\n\n`;
-      userPrompt += `> These files are imported by the changed files. Review them for context `;
-      userPrompt += `(e.g., interfaces, models, types) but do NOT flag issues in these files — `;
-      userPrompt += `only flag issues in the changed files shown in the diff above.\n\n`;
+      userPrompt += `## Related Files (not changed, for context only)\n\n`;
+      userPrompt += `> These unchanged files give context for the changed code: imported `;
+      userPrompt += `interfaces/models/services, Angular sibling templates and declaring modules, `;
+      userPrompt += `and LoopBack DI binding targets. Use them to judge the changed code, but do `;
+      userPrompt += `NOT flag issues in these files — only flag issues in the changed files shown `;
+      userPrompt += `in the diff above.\n\n`;
       for (const dep of depFiles) {
         userPrompt += `### ${dep.filename}\n`;
-        userPrompt += `*Referenced by: ${dep.referencedBy.join(', ')}*\n`;
+        userPrompt += `*Included because: ${REASON_LABEL[dep.reason ?? 'imported']} ${dep.referencedBy.join(', ')}*\n`;
         userPrompt += `\`\`\`\n${addLineNumbers(dep.content)}\n\`\`\`\n\n`;
       }
     }

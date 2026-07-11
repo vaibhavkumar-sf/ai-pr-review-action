@@ -56,7 +56,8 @@ See `docs/architecture.md` for the full map, fail-safety table, provider matrix,
 - `config/` — schema (inputs SSOT), inputs (parse + batched validation), limits, taxonomy, patterns, profiles.
 - `providers/` — `BaseProvider` holds chain fallback+latching, retry/backoff, streaming heartbeat, timeouts, thinking fallback, preflight; dialects implement `streamOnce`/`probe`/error classifiers. `ai_provider` input: `anthropic` (default, SDK) or `openai` (raw fetch SSE `/chat/completions`, works with any OpenAI-compatible endpoint).
 - `github/threads.ts` — the single GraphQL review-threads module (fetch/resolve/minimize).
-- `utils/` — mermaid sanitizer+validation, import extractor, json extraction, line numbering, logger (+ job summary).
+- `context/` — related-context retrieval (`related_context` input: full/imports-only/off): one recursive Git Trees call (`repo-tree.ts`) backs resolution of relative + tsconfig-path-alias (`ts-paths.ts`) + npm-workspace (`workspace-packages.ts`) imports, barrel re-exports, Angular template/module siblings, and LB4 string-key DI bindings (`related-files.ts`); ranked + budgeted, best-effort, degrades to relative-only probing when the tree is truncated. See docs/architecture.md § Related-context retrieval.
+- `utils/` — mermaid sanitizer+validation, import extractor (specifiers + named symbols), json extraction, line numbering, logger (+ job summary).
 
 ## Key Design Decisions
 

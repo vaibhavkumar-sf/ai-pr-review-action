@@ -67,7 +67,12 @@ src/
     threads.ts              the ONE GraphQL reviewThreads module (fetch/resolve/minimize)
     diff-parser.ts          unified-diff parsing, line→position mapping
   context/
-    pr-context.ts           diff, changed files, dependency files
+    pr-context.ts           diff, changed files, related-context orchestration
+    repo-tree.ts            one recursive Git Trees call → in-memory path index
+    ts-paths.ts             tsconfig paths alias resolution (JSONC, extends, scoped)
+    workspace-packages.ts   npm-workspace package → directory resolution
+    related-files.ts        framework siblings (Angular templates/modules,
+                            LB4 DI bindings), barrel re-exports, ranking
     repo-context.ts         framework detection, CLAUDE.md
     jira-context.ts         optional JIRA enrichment (fault-tolerant)
   results/
@@ -81,7 +86,7 @@ src/
     logger.ts               debug gating + writeJobSummary (feature code logs via @actions/core)
     json.ts                 extractJsonObject
     mermaid.ts              the ONE sanitizer + Kroki validation
-    imports.ts              the ONE relative-import extractor
+    imports.ts              the ONE import extractor (specifiers + named symbols)
     text.ts                 addLineNumbers
 tests/
   unit/ integration/ fixtures/
@@ -218,7 +223,8 @@ A top-level catch in `runReview` guarantees Backstage receives a `failed` report
 
 1. Post/refresh the fixed progress comment; hide noisy bot comments.
 2. Pre-flight the AI endpoint (probe + model-chain resolution).
-3. Gather PR + JIRA + repo context in parallel.
+3. Gather PR + JIRA + repo context in parallel (PR context includes
+   related-context retrieval — see the dedicated section below).
 4. Run agents: `combined` mode = one ComprehensiveAgent covering every
    dimension; `separate` mode = the profile/toggle-selected specialists in
    parallel.
@@ -232,6 +238,39 @@ A top-level catch in `runReview` guarantees Backstage receives a `failed` report
    `----AI-description----` (user content above the separator is preserved).
 9. Set outputs, report to Backstage, write the job summary, apply the fail
    threshold.
+
+## Related-context retrieval
+
+A reviewer needs the unchanged files the changed code depends on. Controlled by
+the `related_context` input (`full` default | `imports-only` | `off`), gathered
+in `pr-context.ts` → `gatherRelatedFiles`:
+
+1. **One recursive Git Trees call** (`repo-tree.ts`) indexes every repo path +
+   blob size; all resolution below is in-memory (zero 404 probing). If the tree
+   is truncated (>100k files), everything degrades to the legacy relative-only
+   probing fallback.
+2. **Import graph** (one hop): relative imports via path math; non-relative
+   imports via tsconfig `paths` aliases (`ts-paths.ts` — JSONC-tolerant,
+   follows local `extends` chains, matchers scoped per tsconfig directory so
+   monorepo aliases don't leak) and npm-workspace packages
+   (`workspace-packages.ts` — `@local/pkg` → `packages/pkg/src/...`).
+3. **Framework expansion** (`full` only, `related-files.ts`): Angular sibling
+   `templateUrl`/`styleUrls` + nearest declaring NgModule; LoopBack4 string-key
+   `@inject('services.X'|'datasources.x'|'repositories.X'|'adapters.X')`
+   resolved by naming convention (PascalCase → kebab-case file).
+4. **Barrels**: an imported `index.ts` is swapped for the file(s) that actually
+   define the imported symbols (named re-exports exact; `export *` by
+   normalized basename heuristic).
+5. **Ranking + budgets**: candidates ranked by reference count → kind weight
+   (models/types highest) → size; capped by `RELATED_FILES_MAX` (24) and
+   `RELATED_TOTAL_MAX_CHARS` (100k). Rank order feeds the trim stages: the
+   first shrink keeps the top 8 related files before dropping them all.
+
+Each related file carries a `reason` (`imported`, `template`, `di-binding`,
+`barrel-reexport`, `declaring-module`, `stylesheet`) rendered in the prompt as
+"*Included because: …*" so the model knows why it's looking at the file. The
+whole phase is best-effort: any failure warns and the review proceeds with
+whatever context resolved.
 
 ## Extension guides
 

@@ -150,6 +150,10 @@ inputs:
     description: 'Comma-separated glob patterns to include (if set, only these are reviewed)'
     required: false
     default: ''
+  related_context:
+    description: 'How much unchanged-file context is fetched for the reviewer: full (import graph incl. tsconfig path aliases, npm-workspace packages and barrel re-exports, plus framework expansion — Angular sibling templates/styles/modules, LoopBack4 string-key DI bindings), imports-only (import graph only), off (none)'
+    required: false
+    default: 'full'
   # ─── Prompt Customization ────────────────────────────────
   system_prompt_override:
     description: 'Full replacement of the default system prompt (replaces all built-in prompts)'
@@ -271,6 +275,7 @@ runs:
     INPUT_MAX_FILES_TO_REVIEW: ${{ inputs.max_files_to_review }}
     INPUT_EXCLUDE_PATTERNS: ${{ inputs.exclude_patterns }}
     INPUT_INCLUDE_PATTERNS: ${{ inputs.include_patterns }}
+    INPUT_RELATED_CONTEXT: ${{ inputs.related_context }}
     INPUT_SYSTEM_PROMPT_OVERRIDE: ${{ inputs.system_prompt_override }}
     INPUT_SYSTEM_PROMPT_APPEND: ${{ inputs.system_prompt_append }}
     INPUT_ANGULAR_PROMPT_APPEND: ${{ inputs.angular_prompt_append }}

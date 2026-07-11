@@ -104,10 +104,13 @@ export const PROMPT_MAX_FILE_CHARS = 10000;
 
 /**
  * Progressive trim stages for fitting the prompt into the context window:
- * full → drop dependency files → shrink per-file content.
+ * full → keep only the top-ranked related files → drop them all → shrink
+ * per-file content. (Related files arrive rank-sorted, so a maxDepFiles cap
+ * keeps the most valuable ones.)
  */
 export const PROMPT_TRIM_STAGES: ReadonlyArray<{ maxDepFiles?: number; maxFileChars?: number }> = [
   {},
+  { maxDepFiles: 8 },
   { maxDepFiles: 0 },
   { maxDepFiles: 0, maxFileChars: 5000 },
   { maxDepFiles: 0, maxFileChars: 2500 },
@@ -163,11 +166,46 @@ export const GITHUB_PER_PAGE = 100;
 /** Max comments fetched per review thread. */
 export const THREAD_COMMENTS_PAGE = 30;
 
-/** Max dependency files fetched for review context. */
+/** Max dependency files fetched via the legacy probing fallback (tree unavailable). */
 export const MAX_DEP_FILES = 10;
 
 /** Max sub-packages scanned for framework detection in a monorepo. */
 export const MONOREPO_SCAN_LIMIT = 3;
+
+// ─── Related-context retrieval (tree-based) ─────────────────────────────────
+
+/** Max related (imported/framework-sibling) files included as review context.
+ *  Higher than the legacy 10: tree-based resolution is precise and pre-ranked,
+ *  and RELATED_TOTAL_MAX_CHARS bounds the aggregate cost. */
+export const RELATED_FILES_MAX = 24;
+
+/** Aggregate char budget across all related files (~25k tokens at 4 chars/tok). */
+export const RELATED_TOTAL_MAX_CHARS = 100_000;
+
+/** Blob-size ceiling for a related file; larger files (bundles, generated code) are skipped pre-fetch. */
+export const RELATED_FILE_MAX_BYTES = 200_000;
+
+/** Max tsconfig files fetched per run (nearest per changed dir + root app/base configs). */
+export const TSCONFIG_FETCH_MAX = 6;
+
+/** Max workspace package.json fetches when mapping package names to directories. */
+export const WORKSPACE_PKG_FETCH_MAX = 8;
+
+/** Barrel (index.ts) re-export chains are followed at most this deep (visited set breaks cycles). */
+export const BARREL_FOLLOW_DEPTH = 2;
+
+/** Max re-export targets pulled in per barrel import (export-* heavy barrels would explode). */
+export const BARREL_MAX_TARGETS = 4;
+
+/** Ranking weight per related-file kind: types/models teach the reviewer the most per token. */
+export const RELATED_KIND_WEIGHT: Readonly<Record<string, number>> = {
+  model: 5,
+  service: 4,
+  module: 3,
+  template: 2,
+  stylesheet: 1,
+  other: 3,
+};
 
 /** Max changed files drawn in the import-graph architecture diagram. */
 export const ARCH_DIAGRAM_MAX_FILES = 20;
