@@ -45,7 +45,10 @@ class FakeProvider extends BaseProvider {
     this.calls.push({ model, useThinking, thinkingBudget });
     return this.handler({ model, useThinking, options, observers, signal, attempt: this.calls.length });
   }
-  protected async probe(): Promise<{ outputTokens: number }> { return { outputTokens: 1 }; }
+  probeHandler?: () => Promise<{ outputTokens: number }>;
+  protected async probe(): Promise<{ outputTokens: number }> {
+    return this.probeHandler ? this.probeHandler() : { outputTokens: 1 };
+  }
   protected async listModels(): Promise<string[]> { return []; }
   protected curlHint(): string { return 'curl'; }
   protected isUnknownModelError(e: unknown): boolean { return /UNKNOWN_MODEL/.test(msg(e)); }
@@ -154,5 +157,26 @@ describe('BaseProvider engine', () => {
     const result = await provider.verifyConnection(1000);
     expect(result.model).toBe('x');
     expect(provider.getResolvedModel()).toBe('x');
+  });
+
+  it('pre-flight waits out 429s instead of failing the run', async () => {
+    let probes = 0;
+    const provider = new FakeProvider(['x'], 0, 0, async () => OK);
+    provider.probeHandler = async () => {
+      probes += 1;
+      if (probes <= 3) throw new Error('RATE_LIMIT: 429');
+      return { outputTokens: 1 };
+    };
+
+    const result = await provider.verifyConnection(1000);
+    expect(result.model).toBe('x');
+    expect(probes).toBe(4);
+  });
+
+  it('pre-flight still fails fast on non-rate-limit errors', async () => {
+    const provider = new FakeProvider(['x'], 0, 0, async () => OK);
+    provider.probeHandler = async () => { throw new Error('401 unauthorized'); };
+
+    await expect(provider.verifyConnection(1000)).rejects.toThrow(/pre-flight check failed/);
   });
 });
