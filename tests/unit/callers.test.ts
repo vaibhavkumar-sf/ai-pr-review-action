@@ -89,6 +89,22 @@ describe('caller discovery (reverse dependencies)', () => {
     expect(deps.some((d) => d.reason === 'caller')).toBe(false);
   });
 
+  it('ranks the production caller ahead of a unit-test caller of the same symbol', async () => {
+    const files = [changed('src/app/board/board.service.ts')];
+    const deps = await gatherRelatedFilesLocal(
+      repoAt(FIXTURE_DIR), makeConfig(), files, wholeFileDiff('src/app/board/board.service.ts'),
+    );
+
+    const callerPaths = deps.filter((d) => d.reason === 'caller').map((d) => d.filename);
+    const prodIdx = callerPaths.indexOf('src/app/reports/report.generator.ts');
+    const testIdx = callerPaths.indexOf('src/app/board/__tests__/board.service.unit.ts');
+
+    // Both are genuine callers, but the production one must come first so it can
+    // never be crowded out of the bounded caller budget by test files.
+    expect(prodIdx).toBeGreaterThanOrEqual(0);
+    if (testIdx >= 0) expect(prodIdx).toBeLessThan(testIdx);
+  });
+
   it('never reports a changed file or an excluded file as a caller', async () => {
     const files = [
       changed('src/app/board/board.service.ts'),

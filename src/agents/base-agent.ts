@@ -143,6 +143,10 @@ export abstract class BaseAgent {
         maxTokensAuto: this.getMaxTokens() === 0,
         temperature: this.config.temperature,
         timeout: this.config.agentTimeout * 1000,
+        // Ask for guaranteed-valid JSON where the endpoint supports it; the
+        // healing cascade stays the safety net for endpoints that ignore it
+        // and for tool turns (jsonMode is suppressed when tools are active).
+        jsonMode: true,
       };
       // Main review call: when context tools are available the model may pull
       // missing context itself, on a hard bound (worst case TOOL_LOOP_MAX_ROUNDS
@@ -671,8 +675,17 @@ export abstract class BaseAgent {
     // finding costs itself, not the whole review.
     const salvaged = salvageFindingObjects(content);
     if (salvaged) {
+      // Per-finding salvage drops any object it cannot parse. Estimate how many
+      // findings the model *intended* (each finding object carries a "severity")
+      // so a silent loss becomes a visible, actionable warning rather than an
+      // undercount nobody notices.
+      const intended = (content.match(/"severity"\s*:/g) ?? []).length;
+      const lost = Math.max(0, intended - salvaged.length);
       core.warning(
-        `Agent ${this.name}: response JSON was malformed — salvaged ${salvaged.length} finding(s) individually`,
+        `Agent ${this.name}: response JSON was malformed — salvaged ${salvaged.length} finding(s) individually`
+        + (lost > 0
+          ? ` (WARNING: ~${lost} finding(s) could not be recovered and were dropped — model emitted ~${intended})`
+          : ''),
       );
       const summaryMatch = content.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       const scoreMatch = content.match(/"score"\s*:\s*(\d+(?:\.\d+)?)/);

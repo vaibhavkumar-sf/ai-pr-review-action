@@ -96,6 +96,35 @@ describe('OpenAIProvider SSE parsing', () => {
     expect(body.max_tokens).toBe(100);
   });
 
+  it('sends response_format json_object when jsonMode is set without tools', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(sseResponse([{ choices: [{ delta: { content: 'x' } }] }]));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { observers } = collector();
+    const provider = new TestOpenAI('https://api.test/', 'key', ['glm-5.2'], 0, 4096);
+    await provider.run('glm-5.2', MESSAGES, { ...OPTS, jsonMode: true }, false, 0, observers, new AbortController().signal);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.response_format).toEqual({ type: 'json_object' });
+  });
+
+  it('suppresses json_object mode on a tool turn (a tool call must be allowed)', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(sseResponse([{ choices: [{ delta: { content: 'x' } }] }]));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { observers } = collector();
+    const provider = new TestOpenAI('https://api.test/', 'key', ['glm-5.2'], 0, 4096);
+    await provider.run(
+      'glm-5.2', MESSAGES,
+      { ...OPTS, jsonMode: true, tools: [{ name: 'read_file', description: 'r', inputSchema: { type: 'object' } }] },
+      false, 0, observers, new AbortController().signal,
+    );
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.response_format).toBeUndefined();
+    expect(body.tools).toBeDefined();
+  });
+
   it('throws an OpenAIHttpError carrying status and retry-after on a non-2xx response', async () => {
     global.fetch = jest.fn().mockResolvedValue(errorResponse(429, '2')) as unknown as typeof fetch;
 

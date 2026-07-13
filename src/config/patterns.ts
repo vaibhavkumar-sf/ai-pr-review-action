@@ -37,12 +37,17 @@ export const BOT_HIDE_ALL_PATTERNS = [
   'Unit Test Quality Analysis Failed',
 ];
 
-/** Findings in these files are kept in the summary but never posted as inline comments. */
+/** Findings in these files are kept in the summary but never posted as inline
+ *  comments; also used to rank test callers below production ones in
+ *  reverse-dependency context. Covers the naming conventions real
+ *  LB4/Angular/Nest repos use, not just `.unit/.spec/.test`. */
 export const TEST_FILE_PATTERNS: RegExp[] = [
-  /\.unit\.[tj]s$/,
-  /\.spec\.[tj]s$/,
-  /\.test\.[tj]s$/,
-  /(^|\/)__tests__\/unit\//,
+  /\.unit\.[tj]sx?$/,
+  /\.spec\.[tj]sx?$/,
+  /\.test\.[tj]sx?$/,
+  /\.e2e(?:-spec)?\.[tj]sx?$/,
+  /\.integration\.[tj]sx?$/,
+  /(^|\/)(__tests__|__mocks__)\//,
 ];
 
 export function isTestFile(filename: string): boolean {

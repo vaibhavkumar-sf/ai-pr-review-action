@@ -198,6 +198,27 @@ describe('BaseAgent malformed-JSON auto-healing', () => {
     expect(result.findings[0].description).toBe('line1\nline2');
   });
 
+  it('warns when salvage cannot recover every finding the model emitted', async () => {
+    const core = jest.requireMock('@actions/core') as { warning: jest.Mock };
+    core.warning.mockClear();
+    // Two finding objects the model intended (two "severity" keys), but the
+    // second is corrupt (unterminated) so only the first survives salvage.
+    const good = '{"findings": [{"severity": "high", "category": "security", "file": "src/a.ts", '
+      + '"line": 3, "title": "kept", "description": "d"}, {"severity": "low"';
+    const unhealable = good + '\nstray prose the model appended…';
+    const provider = new ScriptedProvider([asResponse(unhealable), asResponse(unhealable)]);
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext());
+
+    expect(result.error).toBeUndefined();
+    expect(result.findings.some((f) => f.title === 'kept')).toBe(true);
+    const lossWarned = core.warning.mock.calls.some(
+      (c: unknown[]) => typeof c[0] === 'string' && /could not be recovered and were dropped/.test(c[0]),
+    );
+    expect(lossWarned).toBe(true);
+  });
+
   it('salvages intact findings individually when even the repair retry is malformed', async () => {
     const mangled = '{"findings": [{"severity": "high", "category": "security", "file": "src/a.ts", '
       + '"line": 3, "title": "kept finding", "description": "d"}, {"severity": "low", "brok';

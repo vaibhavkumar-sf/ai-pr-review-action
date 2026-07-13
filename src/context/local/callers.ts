@@ -15,6 +15,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { ChangedFile } from '../../types';
 import { CALLERS_MAX_FILES, CALLER_SCAN_MAX_FILES, GIT_ACQUIRE_TIMEOUT_MS } from '../../config/limits';
+import { isTestFile } from '../../config/patterns';
 import { parseDiff } from '../../github/diff-parser';
 import { GitRunner } from './git';
 import { TsEngine } from './ts-project';
@@ -77,12 +78,22 @@ export async function findCallers(
   }
 
   candidates = candidates
-    .filter((p) => !changedPaths.has(p) && !isExcluded(p) && !/\.(spec|test)\.tsx?$/.test(p))
+    .filter((p) => !changedPaths.has(p) && !isExcluded(p))
     .slice(0, CALLER_SCAN_MAX_FILES);
 
+  // Confirm production callers before test callers. git grep returns paths in
+  // tree order, where `__tests__/` sorts ahead of `controllers/`/`services/`;
+  // without this, unit tests fill the whole CALLERS_MAX_FILES budget and the
+  // real production callers — the reason the callers path exists — never get
+  // confirmed. Stable within each group preserves tree order.
+  const productionFirst = [
+    ...candidates.filter((p) => !isTestFile(p)),
+    ...candidates.filter((p) => isTestFile(p)),
+  ];
+
   // 3. Compiler confirmation + skeleton extraction.
-  const results: CallerCandidate[] = [];
-  for (const candidate of candidates) {
+  const results: Array<CallerCandidate & { callSiteCount: number; isTest: boolean }> = [];
+  for (const candidate of productionFirst) {
     if (results.length >= CALLERS_MAX_FILES) break;
     try {
       const { resolved } = engine.resolveImports(candidate);
@@ -121,13 +132,23 @@ export async function findCallers(
         path: candidate,
         content: toSkeleton(text, candidate, { keepBodiesOverlapping: callSites }),
         referencedBy: [...referencedBy],
+        callSiteCount: callSites.length,
+        isTest: isTestFile(candidate),
       });
     } catch (err) {
       core.debug(`Caller check failed for ${candidate}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  return results;
+  // Rank: production callers first, then by how many times they actually call
+  // the changed code (a file with 5 call sites reviews harder than one that
+  // merely mentions the type once). Drop the internal ranking fields.
+  return results
+    .sort((a, b) => {
+      if (a.isTest !== b.isTest) return a.isTest ? 1 : -1;
+      return b.callSiteCount - a.callSiteCount;
+    })
+    .map(({ path, content, referencedBy }) => ({ path, content, referencedBy }));
 }
 
 function escapeRegExp(text: string): string {

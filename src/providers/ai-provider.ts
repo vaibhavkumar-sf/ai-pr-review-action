@@ -39,6 +39,13 @@ export interface ChatOptions {
   thinkingBudget?: number;
   /** Tools the model may call this turn (omit = tool use disabled). */
   tools?: ToolDefinition[];
+  /**
+   * Request a guaranteed-valid-JSON response where the endpoint supports it
+   * (OpenAI-dialect `response_format: {type:'json_object'}`). Best-effort:
+   * dialects/endpoints that don't support it ignore the hint, and the agent's
+   * JSON-healing path remains the cross-provider safety net.
+   */
+  jsonMode?: boolean;
 }
 
 export interface ChatResponse {

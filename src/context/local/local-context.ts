@@ -11,7 +11,15 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { minimatch } from 'minimatch';
 import { ActionConfig, ChangedFile, DependencyFile, DependencyReason } from '../../types';
-import { DEP_FILE_MAX_CHARS, RELATED_FILES_MAX, SKELETON_FULL_FILE_MAX_CHARS } from '../../config/limits';
+import {
+  CHARS_PER_TOKEN,
+  DEP_FILE_MAX_CHARS,
+  RELATED_CONTEXT_WINDOW_FRACTION,
+  RELATED_FILES_MAX,
+  RELATED_TOTAL_MAX_CHARS,
+  RELATED_TOTAL_MIN_CHARS,
+  SKELETON_FULL_FILE_MAX_CHARS,
+} from '../../config/limits';
 import { parseDiff } from '../../github/diff-parser';
 import { buildWorkspaceResolver, NULL_WORKSPACE_RESOLVER, WorkspaceResolver } from '../workspace-packages';
 import { FetchText } from '../ts-paths';
@@ -144,11 +152,27 @@ export async function gatherRelatedFilesLocal(
   const ranked = rankCandidates([...candidates.values()], index);
   ranked.sort((a, b) => (hunkHits.get(b.path) ?? 0) - (hunkHits.get(a.path) ?? 0));
 
+  // Window-derived aggregate budget: related context claims at most a fraction
+  // of what the model window has left after the changed code, so on a smaller
+  // window (or a large diff) we select fewer, higher-value deps up front rather
+  // than selecting to the fixed cap only for the trim stages to drop them.
+  const changedCodeChars =
+    changedFiles.reduce((sum, f) => sum + (f.content?.length ?? 0), 0) + diff.length;
+  const windowChars = (config.contextWindow || 0) * CHARS_PER_TOKEN;
+  const windowBudget = windowChars > 0
+    ? Math.round(windowChars * RELATED_CONTEXT_WINDOW_FRACTION - changedCodeChars)
+    : RELATED_TOTAL_MAX_CHARS;
+  const maxTotalChars = Math.max(
+    RELATED_TOTAL_MIN_CHARS,
+    Math.min(RELATED_TOTAL_MAX_CHARS, windowBudget),
+  );
+
   const selected = selectRelatedCandidates(
     ranked,
     index,
     changedFiles.map((f) => f.filename),
     RELATED_FILES_MAX - callers.length,
+    maxTotalChars,
   );
 
   const truncate = (content: string) =>

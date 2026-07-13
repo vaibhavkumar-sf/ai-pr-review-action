@@ -294,6 +294,7 @@ export function selectRelatedCandidates(
   tree: RepoTree,
   referencerOrderHint: string[],
   maxFiles: number = RELATED_FILES_MAX,
+  maxTotalChars: number = RELATED_TOTAL_MAX_CHARS,
 ): RelatedCandidate[] {
   const sizeOf = (path: string) => tree.size(path) ?? DEP_FILE_MAX_CHARS;
   const eligible = ranked.filter((c) => sizeOf(c.path) <= RELATED_FILE_MAX_BYTES);
@@ -326,7 +327,7 @@ export function selectRelatedCandidates(
         const candidate = queue[idx++];
         if (selectedPaths.has(candidate.path)) continue;
         const estimate = Math.min(sizeOf(candidate.path), DEP_FILE_MAX_CHARS);
-        if (totalChars + estimate > RELATED_TOTAL_MAX_CHARS) continue;
+        if (totalChars + estimate > maxTotalChars) continue;
         selectedPaths.add(candidate.path);
         selected.push(candidate);
         totalChars += estimate;
