@@ -302,6 +302,26 @@ export const RELATED_KIND_WEIGHT: Readonly<Record<string, number>> = {
 /** Max changed files drawn in the import-graph architecture diagram. */
 export const ARCH_DIAGRAM_MAX_FILES = 20;
 
+// ─── Related-context retrieval (local clone + TypeScript compiler) ──────────
+
+/** Ceiling for every git subprocess in local-repo acquisition. A shallow
+ *  single-commit fetch of any sane repo finishes well under this; beyond it
+ *  we fall back to the API engine rather than stall the review. */
+export const GIT_ACQUIRE_TIMEOUT_MS = 120_000;
+
+/** stdout buffer ceiling for git subprocesses (`git ls-files` on a 100k-file
+ *  monorepo is still only a few MB; 64 MB never truncates a legitimate repo). */
+export const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+/** Partial-clone blob filter: blobs above this are never sent to the model
+ *  (RELATED_FILE_MAX_BYTES is far smaller), so skip downloading them. */
+export const LOCAL_CLONE_BLOB_LIMIT = '10m';
+
+/** Memory ceiling for compiler analysis on 15k-file monorepos: source files
+ *  materialized across all ts-morph projects. One-hop import context never
+ *  legitimately needs more; past it, barrel expansion degrades gracefully. */
+export const TS_PROJECT_MAX_LOADED_FILES = 400;
+
 // ─── Formatting ─────────────────────────────────────────────────────────────
 
 /** Description column cap in the Critical & High issues table, in chars. */

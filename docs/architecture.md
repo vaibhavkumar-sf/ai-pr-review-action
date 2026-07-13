@@ -242,29 +242,52 @@ A top-level catch in `runReview` guarantees Backstage receives a `failed` report
 ## Related-context retrieval
 
 A reviewer needs the unchanged files the changed code depends on. Controlled by
-the `related_context` input (`full` default | `imports-only` | `off`), gathered
-in `pr-context.ts` → `gatherRelatedFiles`:
+the `related_context` input (`full` default | `imports-only` | `off`), wired in
+`pr-context.ts` step 7. Two engines share the ranking/fair-selection helpers in
+`related-files.ts`, the budgets, and the `DependencyFile[]` output contract.
 
-1. **One recursive Git Trees call** (`repo-tree.ts`) indexes every repo path +
-   blob size; all resolution below is in-memory (zero 404 probing). If the tree
-   is truncated (>100k files), everything degrades to the legacy relative-only
-   probing fallback.
-2. **Import graph** (one hop): relative imports via path math; non-relative
-   imports via tsconfig `paths` aliases (`ts-paths.ts` — JSONC-tolerant,
-   follows local `extends` chains, matchers scoped per tsconfig directory so
-   monorepo aliases don't leak) and npm-workspace packages
-   (`workspace-packages.ts` — `@local/pkg` → `packages/pkg/src/...`).
-3. **Framework expansion** (`full` only, `related-files.ts`): Angular sibling
-   `templateUrl`/`styleUrls` + nearest declaring NgModule; LoopBack4 string-key
-   `@inject('services.X'|'datasources.x'|'repositories.X'|'adapters.X')`
-   resolved by naming convention (PascalCase → kebab-case file).
-4. **Barrels**: an imported `index.ts` is swapped for the file(s) that actually
-   define the imported symbols (named re-exports exact; `export *` by
-   normalized basename heuristic).
-5. **Ranking + budgets**: candidates ranked by reference count → kind weight
-   (models/types highest) → size; capped by `RELATED_FILES_MAX` (24) and
-   `RELATED_TOTAL_MAX_CHARS` (100k). Rank order feeds the trim stages: the
-   first shrink keeps the top 8 related files before dropping them all.
+### Primary engine: local checkout + TypeScript compiler (`context/local/`)
+
+1. **Local repo acquisition** (`local-repo.ts`): reuse the mounted
+   `GITHUB_WORKSPACE` checkout only when its HEAD equals the PR head SHA
+   (`actions/checkout` on pull_request checks out the MERGE commit, whose tree
+   would desync every line number); otherwise `git fetch --depth 1` of exactly
+   the head SHA into a scratch dir (blob-size filtered, token redacted from
+   errors, `git.ts` runs git with array args — no shell). Any failure → API
+   fallback engine.
+2. **File index** (`file-index.ts`): `git ls-files` implements the same
+   `RepoTree` interface the API engine uses, so the framework heuristics run
+   unchanged.
+3. **Compiler-exact imports** (`ts-project.ts`, ts-morph — the tsserver
+   engine): one lazy Project per governing tsconfig (monorepo-safe `paths`
+   resolution incl. `extends`), imports resolved semantically, barrels followed
+   via `getExportedDeclarations()` to the files that actually define the
+   imported symbols — no basename heuristics. External packages (no
+   node_modules) are skipped; workspace imports fall back to
+   `workspace-packages.ts` reading from disk. Memory bounded by
+   `TS_PROJECT_MAX_LOADED_FILES`.
+4. **Hunk-seeded ranking** (`local-context.ts`): candidates whose imported
+   symbols appear in the diff's added lines are boosted ahead of ones only
+   used in untouched code.
+
+### Fallback engine: GitHub API static graph
+
+One recursive Git Trees call (`repo-tree.ts`) + regex import extraction with
+tsconfig-alias (`ts-paths.ts`) and workspace (`workspace-packages.ts`)
+resolution and heuristic barrel expansion — the pre-compiler implementation,
+kept verbatim for when local acquisition fails (fetch blocked, exotic setups)
+and degrading further to relative-only probing when the tree is truncated.
+
+### Shared selection
+
+Framework expansion (`full` only, `related-files.ts`): Angular sibling
+`templateUrl`/`styleUrls` + nearest declaring NgModule; LoopBack4 string-key
+`@inject(...)` resolved by naming convention. Candidates ranked by reference
+count → kind weight (models/types highest) → size, then fair round-robin
+selection across changed files (`selectRelatedCandidates`), capped by
+`RELATED_FILES_MAX` (24) and `RELATED_TOTAL_MAX_CHARS` (100k). Rank order
+feeds the trim stages: the first shrink keeps the top 8 related files before
+dropping them all.
 
 Each related file carries a `reason` (`imported`, `template`, `di-binding`,
 `barrel-reexport`, `declaring-module`, `stylesheet`) rendered in the prompt as
