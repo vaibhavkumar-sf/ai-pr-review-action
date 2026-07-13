@@ -1,6 +1,11 @@
 import { ChatMessage, ChatOptions, ChatResponse } from '../../src/providers/ai-provider';
 import { BaseProvider, extractAdvertisedOutputCap, rateLimitBackoffMs, StreamObservers } from '../../src/providers/base-provider';
-import { OUTPUT_TOKENS_CEILING, RATE_LIMIT_RETRY_DELAY_MAX_MS, RATE_LIMIT_RETRY_DELAY_MS } from '../../src/config/limits';
+import {
+  OUTPUT_TOKENS_CEILING,
+  PREFLIGHT_HANG_MAX_RETRIES,
+  RATE_LIMIT_RETRY_DELAY_MAX_MS,
+  RATE_LIMIT_RETRY_DELAY_MS,
+} from '../../src/config/limits';
 
 // Silence @actions/core logging; the provider logs heavily via core.info/warning.
 jest.mock('@actions/core', () => ({
@@ -46,9 +51,13 @@ class FakeProvider extends BaseProvider {
     this.calls.push({ model, useThinking, thinkingBudget });
     return this.handler({ model, useThinking, options, observers, signal, attempt: this.calls.length });
   }
-  probeHandler?: () => Promise<{ outputTokens: number }>;
-  protected async probe(): Promise<{ outputTokens: number }> {
-    return this.probeHandler ? this.probeHandler() : { outputTokens: 1 };
+  probeHandler?: (signal: AbortSignal) => Promise<{ outputTokens: number }>;
+  protected async probe(_model: string, signal: AbortSignal): Promise<{ outputTokens: number }> {
+    return this.probeHandler ? this.probeHandler(signal) : { outputTokens: 1 };
+  }
+  // Backoff schedules (10s, 15s, …) must not slow the suite down.
+  protected delay(_ms: number): Promise<void> {
+    return Promise.resolve();
   }
   protected async listModels(): Promise<string[]> { return []; }
   protected curlHint(): string { return 'curl'; }
@@ -176,6 +185,39 @@ describe('BaseProvider engine', () => {
     const result = await provider.verifyConnection(1000);
     expect(result.model).toBe('x');
     expect(probes).toBe(4);
+  });
+
+  it('pre-flight retries a hung probe (no first token) and succeeds when the endpoint recovers', async () => {
+    let probes = 0;
+    const provider = new FakeProvider(['x'], 0, 0, async () => OK);
+    provider.probeHandler = async (signal) => {
+      probes += 1;
+      if (probes <= 2) {
+        // Hang: never resolve; reject only when verifyConnection's timeout aborts.
+        return new Promise((_, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      }
+      return { outputTokens: 1 };
+    };
+
+    const result = await provider.verifyConnection(30);
+    expect(result.model).toBe('x');
+    expect(probes).toBe(3);
+  });
+
+  it('pre-flight gives up with a clear error once the hang budget is exhausted', async () => {
+    let probes = 0;
+    const provider = new FakeProvider(['x'], 0, 0, async () => OK);
+    provider.probeHandler = async (signal) => {
+      probes += 1;
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    };
+
+    await expect(provider.verifyConnection(30)).rejects.toThrow(/did not respond within/);
+    expect(probes).toBe(PREFLIGHT_HANG_MAX_RETRIES + 1);
   });
 
   it('pre-flight still fails fast on non-rate-limit errors', async () => {

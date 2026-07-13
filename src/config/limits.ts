@@ -72,6 +72,17 @@ export const HEARTBEAT_INTERVAL_MS = 20000;
 export const PREFLIGHT_TIMEOUT_MS = 45000;
 
 /**
+ * How many times a HUNG pre-flight probe (no first token within
+ * PREFLIGHT_TIMEOUT_MS) is retried before the run is failed. Fair-usage
+ * throttling (z.ai code 1313) sometimes stalls connections instead of
+ * returning a clean 429 — observed in production right after a string of
+ * 429s, proving the endpoint was alive. Unlike 429s (cheap, patient budget of
+ * RATE_LIMIT_MAX_ATTEMPTS), each hang costs a full probe timeout, so this
+ * budget is small: 6 retries ≈ 8 minutes worst case on a truly dead endpoint.
+ */
+export const PREFLIGHT_HANG_MAX_RETRIES = 6;
+
+/**
  * Timeout for cosmetic calls (PR description, diagrams) — bounded so they never
  * dominate the run; they are best-effort and fall back to static content.
  */
