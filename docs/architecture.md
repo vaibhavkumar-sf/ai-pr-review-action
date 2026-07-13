@@ -269,6 +269,18 @@ the `related_context` input (`full` default | `imports-only` | `off`), wired in
 4. **Hunk-seeded ranking** (`local-context.ts`): candidates whose imported
    symbols appear in the diff's added lines are boosted ahead of ones only
    used in untouched code.
+5. **Declaration skeletons** (`skeletons.ts`): related files above
+   `SKELETON_FULL_FILE_MAX_CHARS` are sent as API surface only — long
+   function/method bodies replaced with a "body omitted" marker, keeping
+   JSDoc, decorators, signatures, and type members (purely syntactic, no
+   node_modules needed). Flagged `skeleton: true` and noted in the prompt.
+6. **Callers of changed code** (`callers.ts`): exported symbols whose
+   declarations intersect the diff hunks seed a `git grep` prescreen,
+   confirmed by compiler-resolved imports back to the changed file (so
+   same-named symbols elsewhere never match). Caller files are included as
+   skeletons with only the calling bodies kept (reason `caller`), with
+   reserved slots inside the shared file budget — the reverse-dependency
+   context no import graph provides.
 
 ### Fallback engine: GitHub API static graph
 

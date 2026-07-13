@@ -68,6 +68,7 @@ const REASON_LABEL: Record<DependencyReason, string> = {
   'di-binding': 'DI binding injected by',
   'barrel-reexport': 're-exported through a barrel imported by',
   'declaring-module': 'declaring NgModule of',
+  caller: 'calls code changed in',
 };
 
 export abstract class BaseAgent {
@@ -544,6 +545,9 @@ export abstract class BaseAgent {
       for (const dep of depFiles) {
         userPrompt += `### ${dep.filename}\n`;
         userPrompt += `*Included because: ${REASON_LABEL[dep.reason ?? 'imported']} ${dep.referencedBy.join(', ')}*\n`;
+        if (dep.skeleton) {
+          userPrompt += `*(signatures only — implementation bodies omitted; line numbers approximate)*\n`;
+        }
         userPrompt += `\`\`\`\n${addLineNumbers(dep.content)}\n\`\`\`\n\n`;
       }
     }

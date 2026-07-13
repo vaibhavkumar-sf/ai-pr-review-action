@@ -20,7 +20,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as core from '@actions/core';
 import { ExportDeclaration, ImportDeclaration, Project, SourceFile } from 'ts-morph';
-import { TS_PROJECT_MAX_LOADED_FILES } from '../../config/limits';
+import { CALLER_SEED_SYMBOLS_MAX, TS_PROJECT_MAX_LOADED_FILES } from '../../config/limits';
+import { LineRange } from './skeletons';
 
 export interface ResolvedImport {
   /** Repo-relative path of the file that DEFINES the imported symbols. */
@@ -44,6 +45,9 @@ export interface ImportResolution {
 export interface TsEngine {
   /** Exact resolution of a changed file's imports/re-exports. */
   resolveImports(changedFile: string): ImportResolution;
+  /** Exported symbols of a file whose declarations intersect the given
+   *  1-based line ranges (the diff hunks) — the seeds for caller search. */
+  seedSymbols(changedFile: string, ranges: LineRange[]): string[];
   /** Source files currently materialized across all projects. */
   loadedFileCount(): number;
   dispose(): void;
@@ -192,8 +196,29 @@ export function buildTsEngine(repoDir: string): TsEngine {
     return { resolved, unresolved };
   };
 
+  const seedSymbols = (changedFile: string, ranges: LineRange[]): string[] => {
+    if (disposed || ranges.length === 0 || !/\.[cm]?[tj]sx?$/.test(changedFile)) return [];
+    try {
+      const sourceFile = projectFor(changedFile).addSourceFileAtPath(path.join(repoDir, changedFile));
+      const seeds: string[] = [];
+      for (const [name, decls] of sourceFile.getExportedDeclarations()) {
+        if (seeds.length >= CALLER_SEED_SYMBOLS_MAX) break;
+        const local = decls.find((d) => d.getSourceFile() === sourceFile);
+        if (!local) continue; // re-export — the change isn't in this file
+        const start = local.getStartLineNumber();
+        const end = local.getEndLineNumber();
+        if (ranges.some((r) => r.start <= end && r.end >= start)) seeds.push(name);
+      }
+      return seeds;
+    } catch (err) {
+      core.debug(`TS engine seedSymbols failed for ${changedFile}: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  };
+
   return {
     resolveImports,
+    seedSymbols,
     loadedFileCount,
     dispose: () => {
       disposed = true;
