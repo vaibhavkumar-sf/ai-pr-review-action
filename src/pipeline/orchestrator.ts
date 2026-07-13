@@ -336,7 +336,7 @@ async function consolidateResults(
   if (config.reviewMode !== 'combined') {
     // AI consolidation pass — catches semantic duplicates that string matching misses
     await commenter.postOrUpdateComment('## 🔍 AI Code Review\n\n✅ All agents complete. Consolidating findings...');
-    consolidated = await consolidateFindings(deduplicated, provider, config.agentTimeout * 1000);
+    consolidated = await consolidateFindings(deduplicated, provider, config.agentTimeout * 1000, config.maxTokens);
   }
 
   // Replace findings in agent results with consolidated versions.

@@ -77,16 +77,16 @@ export const INPUTS: readonly InputSpec[] = [
   {
     name: 'max_tokens',
     type: 'number',
-    default: '8192',
+    default: '0',
     group: 'Provider Configuration',
-    description: 'Maximum tokens per AI response',
+    description: '0 (default) = auto: use the model\'s full native output capacity (e.g. 131072 on GLM-5.2) so a review is never truncated by a self-imposed cap; if an endpoint advertises a smaller maximum in its rejection, it is discovered and latched automatically. Set a positive number to cap output tokens manually',
   },
   {
     name: 'thinking_budget',
     type: 'number',
     default: '4096',
     group: 'Provider Configuration',
-    description: 'Extended-thinking budget in tokens, added on top of max_tokens. Sets how long the model reasons before writing findings (~budget/47 seconds on glm-5.2, so 4096 is ~90s of thinking; 16384 was ~350s — too slow). Raise for deeper reasoning, lower for faster reviews, 0 to disable. Auto-disabled if the endpoint rejects the thinking param',
+    description: 'Extended-thinking budget in tokens, added on top of max_tokens. NOTE: GLM endpoints treat thinking as on/off and do NOT enforce this budget — with the default max_tokens auto mode the full output capacity absorbs even a long think. Set 0 to disable thinking. Auto-disabled if the endpoint rejects the thinking param',
   },
   {
     name: 'context_window',

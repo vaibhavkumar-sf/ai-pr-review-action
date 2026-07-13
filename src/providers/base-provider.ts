@@ -3,6 +3,8 @@ import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResu
 import {
   CHARS_PER_TOKEN,
   HEARTBEAT_INTERVAL_MS,
+  OUTPUT_CAP_CLAMP_RETRIES,
+  OUTPUT_TOKENS_CEILING,
   PREFLIGHT_TIMEOUT_MS,
   RATE_LIMIT_MAX_ATTEMPTS,
   RATE_LIMIT_RETRY_DELAY_MS,
@@ -15,6 +17,31 @@ import {
 export interface StreamObservers {
   onThinking(delta: string): void;
   onText(delta: string): void;
+}
+
+/**
+ * Extracts the advertised output-token maximum from a "max_tokens too large"
+ * rejection message. Handles the phrasings used by Anthropic-style endpoints
+ * ("max_tokens: 131072 > 64000, which is the maximum allowed number of output
+ * tokens...") and OpenAI-style ones ("This model supports at most 16384
+ * completion tokens"). Returns null when the message is not about the output
+ * cap (context-length errors are deliberately NOT matched).
+ */
+export function extractAdvertisedOutputCap(message: string): number | null {
+  if (!/max_tokens|output tokens|completion tokens/i.test(message)) return null;
+  const patterns = [
+    /max_tokens[^\d]*[\d,]+\s*>\s*([\d,]+)/i,
+    /less than or equal to\s*([\d,]+)/i,
+    /at most\s*([\d,]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (match) {
+      const cap = parseInt(match[1].replace(/,/g, ''), 10);
+      if (!isNaN(cap) && cap > 0) return cap;
+    }
+  }
+  return null;
 }
 
 /**
@@ -50,6 +77,9 @@ export abstract class BaseProvider implements AIProvider {
   // Presence only — the key value is a secret and is never stored/logged.
   protected apiKeyProvided: boolean;
   private thinkingDisabled = false;
+  // Output-token caps discovered from endpoint rejections ("max_tokens: X >
+  // <max> ..."), latched per model so later calls are clamped up front.
+  private outputCapByModel = new Map<string, number>();
 
   constructor(baseUrl: string, apiKey: string, models: string[], maxRetries: number, thinkingBudget: number) {
     this.models = models.length ? models : [];
@@ -236,7 +266,8 @@ export abstract class BaseProvider implements AIProvider {
     core.info(
       `Preparing request: ~${inputChars.toLocaleString()} input chars `
       + `(~${Math.ceil(inputChars / CHARS_PER_TOKEN).toLocaleString()} tok est), `
-      + `max_output=${options.maxTokens} tok, timeout=${Math.round(options.timeout / 1000)}s`,
+      + `max_output=${options.maxTokens}${options.maxTokensAuto ? ' (auto)' : ''} tok, `
+      + `timeout=${Math.round(options.timeout / 1000)}s`,
     );
 
     // Try each candidate model in order; advance only when a model is rejected as
@@ -293,6 +324,9 @@ export abstract class BaseProvider implements AIProvider {
     // user-configured max_retries with exponential backoff.
     let rateLimitRetries = 0;
     let transientRetries = 0;
+    // Bounded retries after the endpoint rejects max_tokens as above the
+    // model's real capacity (the rejection states the real maximum).
+    let capClampRetries = 0;
 
     while (true) {
       attemptsMade += 1;
@@ -333,10 +367,20 @@ export abstract class BaseProvider implements AIProvider {
           }
         }, HEARTBEAT_INTERVAL_MS);
 
+        // Single enforcement point for the output budget actually sent: the
+        // requested budget plus the thinking allowance on top, clamped to the
+        // model's real capacity (assumed ceiling, or the cap the endpoint
+        // advertised in an earlier rejection).
+        const modelCap = this.outputCapByModel.get(model) ?? OUTPUT_TOKENS_CEILING;
+        const sentMaxTokens = Math.min(
+          options.maxTokens + (useThinking ? thinkingBudget : 0),
+          modelCap,
+        );
+
         const response = await this.streamOnce(
           model,
           messages,
-          options,
+          { ...options, maxTokens: sentMaxTokens },
           useThinking,
           thinkingBudget,
           {
@@ -405,6 +449,20 @@ export abstract class BaseProvider implements AIProvider {
           break;
         }
 
+        // The endpoint rejected max_tokens as above the model's real capacity
+        // and told us the real maximum — latch it and retry clamped, so a run
+        // never fails because our assumed ceiling was too optimistic.
+        const advertisedCap = this.parseOutputCapError(error);
+        if (advertisedCap !== null && advertisedCap > 0 && capClampRetries < OUTPUT_CAP_CLAMP_RETRIES) {
+          capClampRetries += 1;
+          this.outputCapByModel.set(model, advertisedCap);
+          core.warning(
+            `${model} rejected the requested output budget as above its capacity — `
+            + `clamping to the advertised maximum ${advertisedCap} tokens and retrying`,
+          );
+          continue;
+        }
+
         const retryAfterMs = this.getRetryAfterMs(error);
         const isRateLimit = retryAfterMs > 0 || this.isRateLimitError(error);
 
@@ -453,6 +511,14 @@ export abstract class BaseProvider implements AIProvider {
 
   /** True for HTTP 429-style rate limits (used to pick the slower backoff schedule). */
   protected abstract isRateLimitError(error: unknown): boolean;
+
+  /**
+   * When the endpoint rejected max_tokens as above the model's real output
+   * capacity, returns the maximum it advertised in the error message; null for
+   * every other error. Lets auto mode assume a generous ceiling and discover
+   * each model's true cap by rejection instead of hardcoding a catalog.
+   */
+  protected abstract parseOutputCapError(error: unknown): number | null;
 
   protected supportsThinking(modelName: string): boolean {
     if (this.thinkingDisabled) return false;

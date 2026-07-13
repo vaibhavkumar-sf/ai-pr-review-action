@@ -15,7 +15,10 @@ export class ComprehensiveAgent extends BaseAgent {
   readonly category: ReviewCategory = 'comprehensive';
 
   protected getMaxTokens(): number {
-    // One call returns all findings; a low cap truncates the JSON and loses everything
+    // 0 = auto (the model's full capacity) — pass through untouched. A manual
+    // cap is floored: one call returns ALL findings, and a low cap truncates
+    // the JSON and loses everything.
+    if (this.config.maxTokens === 0) return 0;
     return Math.max(this.config.maxTokens, COMBINED_MAX_TOKENS_FLOOR);
   }
 

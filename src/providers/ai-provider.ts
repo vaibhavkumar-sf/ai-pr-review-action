@@ -5,6 +5,8 @@ export interface ChatMessage {
 
 export interface ChatOptions {
   maxTokens: number;
+  /** True when maxTokens was auto-resolved from max_tokens: 0 (logging only). */
+  maxTokensAuto?: boolean;
   temperature: number;
   timeout: number;
   /**

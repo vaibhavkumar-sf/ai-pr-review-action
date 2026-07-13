@@ -107,16 +107,20 @@ export const DIAGRAM_MAX_RETRIES = 1;
 
 // ─── Prompt truncation ──────────────────────────────────────────────────────
 
-/** Default per-file content cap in the review prompt, in chars. */
+/** Fallback per-file content cap used by the LOWER trim stages, in chars.
+ *  Stage 0 is uncapped: a carefully-reviewed file is a complete file. */
 export const PROMPT_MAX_FILE_CHARS = 10000;
 
 /**
  * Progressive trim stages for fitting the prompt into the context window:
- * full → keep only the top-ranked related files → drop them all → shrink
- * per-file content. (Related files arrive rank-sorted, so a maxDepFiles cap
- * keeps the most valuable ones.)
+ * full fidelity (uncapped files) → shrink per-file content → drop related
+ * files → shrink further. Stage 0 is the only stage a review should normally
+ * use; anything lower is logged loudly. (Related files arrive rank-sorted, so
+ * a maxDepFiles cap keeps the most valuable ones.)
  */
 export const PROMPT_TRIM_STAGES: ReadonlyArray<{ maxDepFiles?: number; maxFileChars?: number }> = [
+  { maxFileChars: Number.POSITIVE_INFINITY },
+  { maxFileChars: 25000 },
   {},
   { maxDepFiles: 8 },
   { maxDepFiles: 0 },
@@ -159,10 +163,30 @@ export const TRUNCATION_RETRY_TOKENS_MULTIPLIER = 2;
 export const TRUNCATION_RETRY_MAX_ESCALATIONS = 3;
 
 /**
- * Ceiling for escalated max_tokens — the output-token maximum typical endpoints
- * (GLM-5.x, Claude Opus/Sonnet) accept; asking beyond it gets a 400 rejection.
+ * The model's full native output capacity assumed in auto mode (max_tokens: 0)
+ * — GLM-5.x's documented 128K maximum. Endpoints with a smaller real cap
+ * reject with a 400 that states their maximum; the provider parses it, latches
+ * the discovered cap per model, and retries (see parseOutputCapError), so this
+ * value never has to be exactly right for any given model.
  */
 export const OUTPUT_TOKENS_CEILING = 131072;
+
+/**
+ * Input-budget reservation divisor in auto output mode: reserve
+ * min(OUTPUT_TOKENS_CEILING, contextWindow / this) for output when trimming
+ * the prompt, so small-window models keep most of their window for input.
+ */
+export const AUTO_OUTPUT_RESERVATION_DIVISOR = 4;
+
+/**
+ * Cost backstop for auto-batching: a PR too big for even this many
+ * full-fidelity review calls falls back to the trim stages (with a loud
+ * warning) instead of unbounded spend.
+ */
+export const MAX_REVIEW_BATCHES = 10;
+
+/** Bounded retries after an endpoint rejects max_tokens as above its real cap. */
+export const OUTPUT_CAP_CLAMP_RETRIES = 2;
 
 // ─── Deduplication & thread matching ────────────────────────────────────────
 

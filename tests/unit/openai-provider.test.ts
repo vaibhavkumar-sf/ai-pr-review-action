@@ -77,7 +77,7 @@ describe('OpenAIProvider SSE parsing', () => {
     expect(res.stopReason).toBe('stop');
   });
 
-  it('sends stream + usage + thinking extension and folds the budget into max_tokens', async () => {
+  it('sends stream + usage + thinking extension and passes max_tokens through verbatim', async () => {
     const fetchMock = jest.fn().mockResolvedValue(sseResponse([{ choices: [{ delta: { content: 'x' } }] }]));
     global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -91,7 +91,9 @@ describe('OpenAIProvider SSE parsing', () => {
     expect(body.stream).toBe(true);
     expect(body.stream_options.include_usage).toBe(true);
     expect(body.thinking).toEqual({ type: 'enabled' });
-    expect(body.max_tokens).toBe(100 + 4096);
+    // The thinking allowance and capacity clamp are applied ONCE in
+    // BaseProvider.chatWithModel; the dialect sends the final value as-is.
+    expect(body.max_tokens).toBe(100);
   });
 
   it('throws an OpenAIHttpError carrying status and retry-after on a non-2xx response', async () => {

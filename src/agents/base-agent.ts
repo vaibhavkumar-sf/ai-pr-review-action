@@ -5,10 +5,13 @@ import { addLineNumbers } from '../utils/text';
 import { loadPrompt, loadPromptOrEmpty } from '../prompts/loader';
 import { coerceFinding } from '../config/taxonomy';
 import {
+  AUTO_OUTPUT_RESERVATION_DIVISOR,
   CHARS_PER_TOKEN,
+  COMBINED_MAX_TOKENS_FLOOR,
   COMPACT_INPUT_TOKENS,
   CONTEXT_SAFETY_MARGIN_TOKENS,
   ERROR_SNIPPET_CHARS,
+  MAX_REVIEW_BATCHES,
   OUTPUT_TOKENS_CEILING,
   PROMPT_CLAMP_FLOOR_TOKENS,
   PROMPT_MAX_FILE_CHARS,
@@ -43,6 +46,20 @@ interface PromptTrimOptions {
   includeFileContents: boolean;
 }
 
+/**
+ * Splits a unified diff into per-file chunks keyed by the new-side path, so a
+ * batched review context carries only its own files' diffs.
+ */
+function splitDiffByFile(diff: string): Map<string, string> {
+  const byFile = new Map<string, string>();
+  for (const part of diff.split(/^(?=diff --git )/m)) {
+    if (!part.startsWith('diff --git ')) continue;
+    const header = part.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (header) byFile.set(header[2].trim(), part.trimEnd());
+  }
+  return byFile;
+}
+
 /** Human phrasing for why a related file is in the prompt (presentation only). */
 const REASON_LABEL: Record<DependencyReason, string> = {
   imported: 'imported by',
@@ -64,17 +81,56 @@ export abstract class BaseAgent {
 
   async review(context: ReviewContext): Promise<AgentResult> {
     const startTime = Date.now();
-    try {
-      const maxTokens = this.getMaxTokens();
-      const chatOpts = {
-        maxTokens,
-        temperature: this.config.temperature,
-        timeout: this.config.agentTimeout * 1000,
-      };
 
+    // Auto-batching: when even the FULL-fidelity prompt cannot fit the input
+    // budget, split the changed files into batches and review every one of
+    // them completely, instead of silently degrading through the trim stages.
+    let batches: ReviewContext[];
+    try {
+      batches = this.planBatches(context);
+    } catch (error) {
+      core.warning(
+        `Agent ${this.name}: batch planning failed `
+        + `(${error instanceof Error ? error.message : String(error)}) — reviewing in one call`,
+      );
+      batches = [context];
+    }
+
+    if (batches.length === 1) {
+      return this.reviewBatch(batches[0], startTime);
+    }
+
+    core.warning(
+      `Agent ${this.name}: PR too large for one full-fidelity call — `
+      + `reviewing in ${batches.length} batches so every file is fully reviewed`,
+    );
+    const results: AgentResult[] = [];
+    for (let i = 0; i < batches.length; i++) {
+      core.info(
+        `Agent ${this.name}: reviewing batch ${i + 1}/${batches.length} `
+        + `(${batches[i].changedFiles.length} files)…`,
+      );
+      results.push(await this.reviewBatch(batches[i], Date.now()));
+    }
+    return this.mergeBatchResults(results, startTime);
+  }
+
+  /** Reviews ONE (possibly batched) context. Never throws — failures come back as an error result. */
+  private async reviewBatch(context: ReviewContext, startTime: number): Promise<AgentResult> {
+    try {
       // Pre-flight: trim the prompt to fit the model's context window so the
       // request is not rejected with model_context_window_exceeded.
       const messages = this.buildBudgetedMessages(context);
+      // Output budget: the user's manual cap, or (auto mode, the default) the
+      // model's full remaining capacity so the review is never truncated by a
+      // self-imposed limit. The provider clamps to the model's real cap.
+      const maxTokens = this.resolveMaxTokens(messages);
+      const chatOpts = {
+        maxTokens,
+        maxTokensAuto: this.getMaxTokens() === 0,
+        temperature: this.config.temperature,
+        timeout: this.config.agentTimeout * 1000,
+      };
       let response = await this.provider.chat(messages, chatOpts);
 
       // Auto-heal, branched by failure mode:
@@ -95,13 +151,15 @@ export abstract class BaseAgent {
       // whose findings genuinely need more room (text is truncated JSON). Retry
       // with thinking disabled and an escalating output budget, so a user's
       // review never fails because our cap was too small.
+      // At the ceiling the first retry still runs (thinking off frees the whole
+      // budget for findings text); further escalations need headroom to matter.
       let escalatedTokens = maxTokens;
       for (
         let escalation = 0;
         response.stopReason === 'max_tokens'
           && !this.tryParseResponse(response.content)
           && escalation < TRUNCATION_RETRY_MAX_ESCALATIONS
-          && escalatedTokens < OUTPUT_TOKENS_CEILING;
+          && (escalatedTokens < OUTPUT_TOKENS_CEILING || escalation === 0);
         escalation++
       ) {
         escalatedTokens = Math.min(escalatedTokens * TRUNCATION_RETRY_TOKENS_MULTIPLIER, OUTPUT_TOKENS_CEILING);
@@ -180,6 +238,139 @@ export abstract class BaseAgent {
   }
 
   /**
+   * The output budget for one call: the user's manual cap, or in auto mode
+   * (max_tokens: 0, the default) the model's full remaining capacity —
+   * min(native ceiling, what the context window still has room for after the
+   * input). Floored so a huge input never leaves a uselessly small budget
+   * (the endpoint's own capacity check is authoritative; the provider clamps
+   * to any smaller cap the endpoint advertises).
+   */
+  protected resolveMaxTokens(messages: ChatMessage[]): number {
+    const configured = this.getMaxTokens();
+    if (configured > 0) return configured;
+    const inputTokens = messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+    return Math.max(
+      Math.min(
+        OUTPUT_TOKENS_CEILING,
+        this.config.contextWindow - inputTokens - CONTEXT_SAFETY_MARGIN_TOKENS,
+      ),
+      COMBINED_MAX_TOKENS_FLOOR,
+    );
+  }
+
+  /**
+   * Input-token budget for the user prompt: the context window minus the
+   * output reservation, the system prompt, and a safety margin. In auto mode
+   * the reservation is a window fraction (not the full ceiling) so
+   * small-window models keep most of their window for input.
+   */
+  private inputBudgetTokens(systemPrompt: string): number {
+    const configuredMax = this.getMaxTokens();
+    const outputReservation = (configuredMax > 0
+      ? configuredMax
+      : Math.min(OUTPUT_TOKENS_CEILING, Math.floor(this.config.contextWindow / AUTO_OUTPUT_RESERVATION_DIVISOR)))
+      + this.config.thinkingBudget;
+    return this.config.contextWindow
+      - outputReservation
+      - estimateTokens(systemPrompt)
+      - CONTEXT_SAFETY_MARGIN_TOKENS;
+  }
+
+  /**
+   * Splits an oversized review into per-file batches that EACH fit the input
+   * budget at full fidelity, so every file is completely reviewed instead of
+   * silently truncated. Normal-sized PRs return a single batch (no change).
+   */
+  protected planBatches(context: ReviewContext): ReviewContext[] {
+    if (context.changedFiles.length <= 1) return [context];
+    const systemPrompt = this.buildSystemPrompt(context);
+    const inputBudget = this.inputBudgetTokens(systemPrompt);
+    const fullPrompt = this.buildUserPrompt(context, PROMPT_TRIM_STAGES[0]);
+    if (estimateTokens(fullPrompt) <= inputBudget) return [context];
+
+    const diffByFile = splitDiffByFile(context.diff);
+    const deps = context.dependencyFiles ?? [];
+    const depsFor = (filename: string): typeof deps =>
+      deps.filter(d => d.referencedBy.includes(filename));
+
+    // Estimated prompt cost per changed file: its content + its diff chunk +
+    // the related files it pulls in.
+    const costs = context.changedFiles.map(f =>
+      (f.content?.length ?? 0)
+      + (diffByFile.get(f.filename)?.length ?? 0)
+      + depsFor(f.filename).reduce((sum, d) => sum + d.content.length, 0),
+    );
+    const overheadChars = this.buildUserPrompt(
+      { ...context, changedFiles: [], dependencyFiles: [], diff: '' },
+      PROMPT_TRIM_STAGES[0],
+    ).length;
+    const totalCost = costs.reduce((a, b) => a + b, 0);
+    const fittingBudget = Math.max(
+      inputBudget * CHARS_PER_TOKEN - overheadChars,
+      PROMPT_CLAMP_FLOOR_TOKENS * CHARS_PER_TOKEN,
+    );
+    // Cost backstop: never more than MAX_REVIEW_BATCHES calls. Beyond that,
+    // batches exceed the budget and fall back to the trim stages (warned).
+    const perBatchBudget = Math.max(fittingBudget, Math.ceil(totalCost / MAX_REVIEW_BATCHES));
+    if (perBatchBudget > fittingBudget) {
+      core.warning(
+        `Agent ${this.name}: PR needs more than ${MAX_REVIEW_BATCHES} full-fidelity batches — `
+        + `capping at ${MAX_REVIEW_BATCHES}; oversized batches will be trimmed to fit`,
+      );
+    }
+
+    // Greedy pack in order; every batch gets at least one file.
+    const groups: Array<typeof context.changedFiles> = [];
+    let current: typeof context.changedFiles = [];
+    let currentCost = 0;
+    for (let i = 0; i < context.changedFiles.length; i++) {
+      if (current.length > 0 && currentCost + costs[i] > perBatchBudget) {
+        groups.push(current);
+        current = [];
+        currentCost = 0;
+      }
+      current.push(context.changedFiles[i]);
+      currentCost += costs[i];
+    }
+    if (current.length > 0) groups.push(current);
+    if (groups.length <= 1) return [context];
+
+    return groups.map(files => {
+      const names = new Set(files.map(f => f.filename));
+      const batchDeps = deps.filter(d => d.referencedBy.some(ref => names.has(ref)));
+      const batchDiff = files
+        .map(f => diffByFile.get(f.filename))
+        .filter((chunk): chunk is string => Boolean(chunk))
+        .join('\n');
+      return { ...context, changedFiles: files, dependencyFiles: batchDeps, diff: batchDiff || context.diff };
+    });
+  }
+
+  /** Combines per-batch results into one AgentResult (dedup happens downstream). */
+  private mergeBatchResults(results: AgentResult[], startTime: number): AgentResult {
+    const succeeded = results.filter(r => !r.error);
+    const failed = results.filter(r => r.error);
+    let summary = succeeded.map(r => r.summary).filter(Boolean).join('\n\n');
+    if (failed.length > 0 && succeeded.length > 0) {
+      summary += `\n\n⚠️ ${failed.length}/${results.length} review batches failed — `
+        + 'findings may be incomplete for some files. Re-run the workflow to retry.';
+    }
+    return {
+      agentName: this.name,
+      category: this.category,
+      findings: results.flatMap(r => r.findings),
+      summary: summary || 'Failed to parse response',
+      score: succeeded.length
+        ? Math.round((succeeded.reduce((sum, r) => sum + r.score, 0) / succeeded.length) * 10) / 10
+        : 0,
+      durationMs: Date.now() - startTime,
+      ...(succeeded.length === 0
+        ? { error: `all ${results.length} review batches failed: ${failed[0]?.error ?? 'unknown error'}` }
+        : {}),
+    };
+  }
+
+  /**
    * Builds messages trimmed to fit the target model's context window. The prompt
    * is assembled at progressively smaller sizes (full → drop dependency files →
    * shrink per-file content) until the estimated input tokens fit within
@@ -188,13 +379,7 @@ export abstract class BaseAgent {
    */
   protected buildBudgetedMessages(context: ReviewContext): ChatMessage[] {
     const systemPrompt = this.buildSystemPrompt(context);
-    // Reserve the real output budget: max_tokens plus the configured thinking
-    // budget the provider adds on top of it.
-    const outputReservation = this.getMaxTokens() + this.config.thinkingBudget;
-    const inputBudget = this.config.contextWindow
-      - outputReservation
-      - estimateTokens(systemPrompt)
-      - CONTEXT_SAFETY_MARGIN_TOKENS;
+    const inputBudget = this.inputBudgetTokens(systemPrompt);
 
     let userPrompt = this.buildUserPrompt(context, PROMPT_TRIM_STAGES[0]);
     let stageUsed = 0;
