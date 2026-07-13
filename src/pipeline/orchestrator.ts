@@ -6,6 +6,7 @@ import { AIProvider } from '../providers/ai-provider';
 import { createAIProvider } from '../providers/provider-factory';
 import { BaseAgent, createAgents } from '../agents';
 import { PRCommenter } from '../github/pr-commenter';
+import { startPrStateWatcher } from '../github/pr-state-watcher';
 import { InlineReviewer } from '../github/inline-reviewer';
 import { ReplyHandler } from '../github/reply-handler';
 import { parseDiff } from '../github/diff-parser';
@@ -28,6 +29,13 @@ export async function runReview(config: ActionConfig): Promise<void> {
   const octokit = new Octokit({ auth: config.githubToken });
   const commenter = new PRCommenter(octokit, config.owner, config.repo, config.prNumber);
 
+  // Cancel the run (neutral exit) if the PR is closed/merged mid-review —
+  // long waits (429 patience, slow models) must not burn a runner for a PR
+  // nobody can act on anymore.
+  const stopPrWatcher = config.cancelOnPrClose
+    ? startPrStateWatcher(octokit, config)
+    : (): void => undefined;
+
   try {
     await runPipeline(config, octokit, commenter);
   } catch (error) {
@@ -38,6 +46,8 @@ export async function runReview(config: ActionConfig): Promise<void> {
       await reportRunOutcome(config, 'failed', msg);
     }
     throw error;
+  } finally {
+    stopPrWatcher();
   }
 }
 

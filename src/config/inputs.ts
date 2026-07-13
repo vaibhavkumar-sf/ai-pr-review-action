@@ -215,6 +215,7 @@ export function parseActionInputs(): ActionConfig {
     // Advanced
     agentTimeout: getNumber('agent_timeout'),
     maxRetries: getNumber('max_retries'),
+    cancelOnPrClose: getBoolean('cancel_on_pr_close'),
     debug: getBoolean('debug'),
   };
 }

@@ -194,6 +194,10 @@ inputs:
     description: 'Maximum retries per agent on transient AI API failure (5xx/network). Rate limits (429) retry on their own patient budget — up to 400 attempts, ~10s apart — independent of this setting'
     required: false
     default: '3'
+  cancel_on_pr_close:
+    description: 'Cancel the review run (neutral exit, not a failure) if the PR is closed or merged while the review is still running, freeing the runner and AI quota'
+    required: false
+    default: 'true'
   debug:
     description: 'Enable debug logging'
     required: false
@@ -285,4 +289,5 @@ runs:
     INPUT_ENABLE_DIAGRAMS: ${{ inputs.enable_diagrams }}
     INPUT_AGENT_TIMEOUT: ${{ inputs.agent_timeout }}
     INPUT_MAX_RETRIES: ${{ inputs.max_retries }}
+    INPUT_CANCEL_ON_PR_CLOSE: ${{ inputs.cancel_on_pr_close }}
     INPUT_DEBUG: ${{ inputs.debug }}

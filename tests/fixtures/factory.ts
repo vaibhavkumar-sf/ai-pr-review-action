@@ -50,6 +50,7 @@ export function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig 
     commentFooter: '',
     agentTimeout: 600,
     maxRetries: 3,
+    cancelOnPrClose: true,
     debug: false,
     ...overrides,
   };

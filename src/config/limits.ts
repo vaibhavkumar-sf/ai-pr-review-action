@@ -192,6 +192,12 @@ export const STALE_THREAD_PROXIMITY = 3;
 /** Page size for GitHub REST/GraphQL list calls. */
 export const GITHUB_PER_PAGE = 100;
 
+/**
+ * How often the run polls the PR's open/closed state so a review of a
+ * closed/merged PR is cancelled promptly without burning API quota.
+ */
+export const PR_STATE_POLL_INTERVAL_MS = 30000;
+
 /** Max comments fetched per review thread. */
 export const THREAD_COMMENTS_PAGE = 30;
 

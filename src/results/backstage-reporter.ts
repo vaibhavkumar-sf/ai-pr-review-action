@@ -114,7 +114,7 @@ export async function reportToBackstage(
  */
 export async function reportRunOutcome(
   config: ActionConfig,
-  status: 'skipped' | 'failed',
+  status: 'skipped' | 'failed' | 'cancelled',
   reason: string,
 ): Promise<boolean> {
   if (!config.postDataUrl) return false;
