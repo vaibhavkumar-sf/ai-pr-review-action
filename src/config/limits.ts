@@ -272,6 +272,15 @@ export const RELATED_FILES_MAX = 24;
 /** Aggregate char budget across all related files (~25k tokens at 4 chars/tok). */
 export const RELATED_TOTAL_MAX_CHARS = 100_000;
 
+/** Fraction of the model's context window related context may claim, so on a
+ *  smaller-window model (or a large diff) related files don't get selected only
+ *  to be trimmed away downstream. Applied against (window − changed-code cost). */
+export const RELATED_CONTEXT_WINDOW_FRACTION = 0.25;
+
+/** Floor for the window-derived related budget: even a small window still gets
+ *  a useful amount of related context rather than none. */
+export const RELATED_TOTAL_MIN_CHARS = 20_000;
+
 /** Blob-size ceiling for a related file; larger files (bundles, generated code) are skipped pre-fetch. */
 export const RELATED_FILE_MAX_BYTES = 200_000;
 

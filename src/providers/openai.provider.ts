@@ -98,6 +98,12 @@ export class OpenAIProvider extends BaseProvider {
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
       }));
     }
+    // JSON mode: forces syntactically-valid JSON on OpenAI-compatible endpoints
+    // that support it (eliminates the malformed-JSON class at the source).
+    // Not combined with tools — a tool turn must be free to emit a tool call.
+    if (options.jsonMode && !options.tools?.length) {
+      body.response_format = { type: 'json_object' };
+    }
     if (useThinking) {
       // Vendor extension (z.ai coding endpoint); rejected → base class strips it.
       body.thinking = { type: 'enabled' };
