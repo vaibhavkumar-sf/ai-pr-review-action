@@ -25,7 +25,7 @@ import {
 import { LocalRepo } from './local-repo';
 import { buildLocalFileIndex } from './file-index';
 import { buildTsEngine } from './ts-project';
-import { toSkeleton } from './skeletons';
+import { LineRange, toSkeleton } from './skeletons';
 import { findCallers } from './callers';
 import { createGitRunner } from './git';
 
@@ -75,16 +75,22 @@ export async function gatherRelatedFilesLocal(
 
   // Added-line text per changed file: candidates whose imported symbols
   // actually appear in the changed hunks outrank ones only used in untouched
-  // code (the diff-blindness fix).
+  // code (the diff-blindness fix). Added-line RANGES gate re-export following
+  // in the engine: a changed barrel only pulls in the exports the PR touched.
   const hunkText = new Map<string, string>();
+  const addedRanges = new Map<string, LineRange[]>();
   try {
     for (const parsed of parseDiff(diff)) {
-      const added = parsed.hunks
+      const addedLines = parsed.hunks
         .flatMap((h) => h.lines)
-        .filter((l) => l.type === 'add')
-        .map((l) => l.content)
-        .join('\n');
-      hunkText.set(parsed.filename, added);
+        .filter((l) => l.type === 'add');
+      hunkText.set(parsed.filename, addedLines.map((l) => l.content).join('\n'));
+      addedRanges.set(
+        parsed.filename,
+        addedLines
+          .filter((l) => l.newLineNumber !== undefined)
+          .map((l) => ({ start: l.newLineNumber as number, end: l.newLineNumber as number })),
+      );
     }
   } catch (err) {
     core.debug(`Hunk parsing for context ranking failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -93,7 +99,7 @@ export async function gatherRelatedFilesLocal(
 
   for (const file of changedFiles) {
     if (!file.content || file.status === 'removed') continue;
-    const { resolved, unresolved } = engine.resolveImports(file.filename);
+    const { resolved, unresolved } = engine.resolveImports(file.filename, addedRanges.get(file.filename));
 
     for (const imp of resolved) {
       addCandidate(imp.path, file.filename, imp.viaBarrel ? 'barrel-reexport' : 'imported');
