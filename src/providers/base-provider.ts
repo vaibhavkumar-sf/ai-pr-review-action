@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResult } from './ai-provider';
+import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResult, ToolCall, ToolDefinition } from './ai-provider';
 import {
   CHARS_PER_TOKEN,
   HEARTBEAT_INTERVAL_MS,
@@ -21,6 +21,8 @@ import {
 export interface StreamObservers {
   onThinking(delta: string): void;
   onText(delta: string): void;
+  /** A tool call started streaming (keeps the heartbeat honest on tool turns). */
+  onToolUse?(name: string): void;
 }
 
 /**
@@ -317,7 +319,10 @@ export abstract class BaseProvider implements AIProvider {
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatResponse> {
     // Log the input size up front so a later failure (timeout, overflow) has the
     // request shape in the record without needing a re-run.
-    const inputChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+    const inputChars = messages.reduce(
+      (sum, m) => sum + m.content.length + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0),
+      0,
+    );
     core.info(
       `Preparing request: ~${inputChars.toLocaleString()} input chars `
       + `(~${Math.ceil(inputChars / CHARS_PER_TOKEN).toLocaleString()} tok est), `
@@ -357,6 +362,62 @@ export abstract class BaseProvider implements AIProvider {
       `All candidate models were rejected as unknown (${candidates.join(', ')}): `
       + `${lastUnknownModelError?.message ?? 'Unknown error'}`,
     );
+  }
+
+  async chatWithTools(
+    messages: ChatMessage[],
+    options: ChatOptions,
+    tools: ToolDefinition[],
+    execute: (call: ToolCall) => Promise<string>,
+    bounds: { maxRounds: number; maxCalls: number },
+  ): Promise<{ response: ChatResponse; transcript: ChatMessage[] }> {
+    const transcript: ChatMessage[] = [...messages];
+    let callsUsed = 0;
+
+    for (let round = 0; round <= bounds.maxRounds; round++) {
+      // The last permitted round goes out WITHOUT tools: the model must answer
+      // from what it has, so the review's JSON contract is always honored.
+      const toolsThisTurn = round < bounds.maxRounds && callsUsed < bounds.maxCalls;
+      const response = await this.chat(
+        transcript,
+        toolsThisTurn ? { ...options, tools } : { ...options, tools: undefined },
+      );
+
+      const requested = response.toolCalls ?? [];
+      if (!toolsThisTurn || requested.length === 0) {
+        return { response, transcript };
+      }
+
+      // Execute this round's calls in parallel (they are independent reads),
+      // honoring the remaining per-review budget.
+      const granted = requested.slice(0, Math.max(0, bounds.maxCalls - callsUsed));
+      callsUsed += granted.length;
+      core.info(
+        `Context tools: round ${round + 1}/${bounds.maxRounds} — `
+        + `${granted.map((c) => c.name).join(', ')} (${callsUsed}/${bounds.maxCalls} calls)`,
+      );
+      const results = await Promise.all(
+        granted.map((call) =>
+          execute(call).catch((err: unknown) =>
+            `tool error: ${err instanceof Error ? err.message : String(err)}`),
+        ),
+      );
+
+      transcript.push({ role: 'assistant', content: response.content, toolCalls: granted });
+      granted.forEach((call, i) => {
+        transcript.push({ role: 'tool', content: results[i], toolCallId: call.id });
+      });
+      for (const denied of requested.slice(granted.length)) {
+        transcript.push({
+          role: 'tool',
+          content: 'tool budget exhausted — answer from the provided context',
+          toolCallId: denied.id,
+        });
+      }
+    }
+
+    // Unreachable: the final round is always tool-less and returns above.
+    throw new Error('chatWithTools exhausted its rounds without a final answer');
   }
 
   private async chatWithModel(
@@ -447,6 +508,7 @@ export abstract class BaseProvider implements AIProvider {
               }
             },
             onText: (delta) => { textChars += delta.length; },
+            onToolUse: (name) => { core.info(`  ⏳ ${model}: requesting tool ${name} [${elapsedSec()}s/${timeoutSec}s]`); },
           },
           abortController.signal,
         );
@@ -454,7 +516,8 @@ export abstract class BaseProvider implements AIProvider {
         core.info(
           `${model} responded in ${elapsedSec()}s `
           + `(${response.inputTokens} in / ${response.outputTokens} out tok, `
-          + `stop_reason=${response.stopReason ?? 'n/a'})`,
+          + `stop_reason=${response.stopReason ?? 'n/a'}`
+          + `${response.toolCalls?.length ? `, tool_calls=${response.toolCalls.length}` : ''})`,
         );
 
         // Thinking-starvation diagnostic: the call "succeeded" but every output

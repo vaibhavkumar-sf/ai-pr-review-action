@@ -23,6 +23,7 @@ import {
 } from './related-files';
 import { acquireLocalRepo } from './local/local-repo';
 import { gatherRelatedFilesLocal } from './local/local-context';
+import { buildContextToolkit, ContextToolkit } from './local/context-tools';
 
 export async function gatherPRContext(config: ActionConfig): Promise<{
   prTitle: string;
@@ -34,6 +35,7 @@ export async function gatherPRContext(config: ActionConfig): Promise<{
   diff: string;
   changedFiles: ChangedFile[];
   dependencyFiles: DependencyFile[];
+  contextTools?: ContextToolkit;
 }> {
   const octokit = new Octokit({ auth: config.githubToken });
   const { owner, repo, prNumber } = config;
@@ -170,6 +172,7 @@ export async function gatherPRContext(config: ActionConfig): Promise<{
   //    engine: local checkout + TypeScript compiler (exact). Fallback: the
   //    GitHub-API static graph. `off` does zero extra work either way.
   let dependencyFiles: DependencyFile[] = [];
+  let contextTools: ContextToolkit | undefined;
   if (config.relatedContext !== 'off') {
     const repo = await acquireLocalRepo(config, headSha);
     try {
@@ -190,7 +193,17 @@ export async function gatherPRContext(config: ActionConfig): Promise<{
         core.warning(`Related-context gathering failed: ${message}. Continuing with diff-only context`);
       }
     } finally {
-      await repo?.cleanup();
+      // With context tools enabled the checkout must outlive this phase: the
+      // toolkit owns it and the orchestrator disposes it after the agents run.
+      if (repo && config.enableContextTools) {
+        contextTools = buildContextToolkit(repo, config);
+        core.info(
+          `Context tools enabled: ${contextTools.definitions.map((d) => d.name).join(', ')} `
+          + `(run budget ${contextTools.callsRemaining()} calls)`,
+        );
+      } else {
+        await repo?.cleanup();
+      }
     }
   }
 
@@ -204,6 +217,7 @@ export async function gatherPRContext(config: ActionConfig): Promise<{
     diff,
     changedFiles,
     dependencyFiles,
+    contextTools,
   };
 }
 

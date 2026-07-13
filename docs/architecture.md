@@ -281,6 +281,23 @@ the `related_context` input (`full` default | `imports-only` | `off`), wired in
    skeletons with only the calling bodies kept (reason `caller`), with
    reserved slots inside the shared file budget — the reverse-dependency
    context no import graph provides.
+7. **Bounded context tool loop** (`context-tools.ts` + provider tool-use,
+   `enable_context_tools` input, default on): the reviewer model may fetch
+   context the deterministic layer missed via local tools — `read_file`
+   (line ranges), `grep`, `find_references` (compiler-confirmed importers),
+   `list_dir` — each executing against the checkout in milliseconds, path-
+   escape-proof and exclude-pattern-filtered. Hard bounds
+   (`TOOL_LOOP_MAX_ROUNDS` = 2 combined / 1 separate,
+   `TOOL_LOOP_MAX_CALLS_PER_REVIEW` = 6, run-wide `TOOL_CALLS_RUN_BUDGET` =
+   12, capped result sizes) keep worst case at 2 extra AI turns; the final
+   turn is always sent tool-less so the findings JSON contract is
+   guaranteed. Heal retries (compact/escalation/repair) reuse the tool
+   transcript without re-running tools. `BaseProvider.chatWithTools` runs
+   the loop; each turn inherits the full retry machinery; both dialects
+   translate the neutral tool definitions (Anthropic `input_schema` blocks /
+   OpenAI streamed `tool_calls` fragments reassembled by index). The
+   orchestrator disposes the toolkit (and the checkout it holds) right after
+   the agents phase.
 
 ### Fallback engine: GitHub API static graph
 

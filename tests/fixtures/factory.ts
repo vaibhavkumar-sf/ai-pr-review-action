@@ -41,6 +41,7 @@ export function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig 
     excludePatterns: [],
     includePatterns: [],
     relatedContext: 'full',
+    enableContextTools: false,
     systemPromptOverride: '',
     systemPromptAppend: '',
     angularPromptAppend: '',

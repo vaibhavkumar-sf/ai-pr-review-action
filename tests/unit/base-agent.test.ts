@@ -20,6 +20,15 @@ class ScriptedProvider implements AIProvider {
     this.calls.push({ messages, options });
     return this.responses[Math.min(this.calls.length - 1, this.responses.length - 1)];
   }
+  async chatWithTools(
+    messages: ChatMessage[],
+    options: ChatOptions,
+    _tools?: unknown,
+    _execute?: unknown,
+    _bounds?: unknown,
+  ): Promise<{ response: ChatResponse; transcript: ChatMessage[] }> {
+    return { response: await this.chat(messages, options), transcript: messages };
+  }
   async logDiagnostics(): Promise<void> { /* not used */ }
   async verifyConnection(): Promise<ConnectionCheckResult> {
     return { model: 'glm-5.2', latencyMs: 1, outputTokens: 1 };
@@ -202,5 +211,42 @@ describe('BaseAgent malformed-JSON auto-healing', () => {
 
     expect(result.error).toBeUndefined();
     expect(result.findings.some((f) => f.title === 'kept finding')).toBe(true);
+  });
+});
+
+describe('BaseAgent context-tool integration', () => {
+  it('routes the main review call through the tool loop when tools are present', async () => {
+    const provider = new ScriptedProvider([good()]);
+    const spy = jest.spyOn(provider, 'chatWithTools');
+    const toolkit = {
+      definitions: [{ name: 'read_file', description: 'read', inputSchema: { type: 'object' } }],
+      execute: async () => 'data',
+      callsRemaining: () => 5,
+      dispose: async () => undefined,
+    };
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext({ contextTools: toolkit }));
+
+    expect(result.error).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][2]).toBe(toolkit.definitions);
+  });
+
+  it('skips the tool loop when the run budget is already exhausted', async () => {
+    const provider = new ScriptedProvider([good()]);
+    const spy = jest.spyOn(provider, 'chatWithTools');
+    const toolkit = {
+      definitions: [{ name: 'read_file', description: 'read', inputSchema: { type: 'object' } }],
+      execute: async () => 'data',
+      callsRemaining: () => 0,
+      dispose: async () => undefined,
+    };
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext({ contextTools: toolkit }));
+
+    expect(result.error).toBeUndefined();
+    expect(spy).not.toHaveBeenCalled();
   });
 });

@@ -26,12 +26,31 @@ export class AnthropicProvider extends BaseProvider {
     signal: AbortSignal,
   ): Promise<ChatResponse> {
     const systemMessage = messages.find((m) => m.role === 'system');
+    // Tool-loop transcripts carry structured turns: assistant messages with
+    // toolCalls become tool_use content blocks; role:'tool' results become
+    // user messages with tool_result blocks (the Messages API shape).
     const conversationMessages = messages
       .filter((m) => m.role !== 'system')
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
+      .map((m) => {
+        if (m.role === 'assistant' && m.toolCalls?.length) {
+          return {
+            role: 'assistant' as const,
+            content: [
+              ...(m.content ? [{ type: 'text', text: m.content }] : []),
+              ...m.toolCalls.map((call) => ({
+                type: 'tool_use', id: call.id, name: call.name, input: call.input,
+              })),
+            ],
+          };
+        }
+        if (m.role === 'tool') {
+          return {
+            role: 'user' as const,
+            content: [{ type: 'tool_result', tool_use_id: m.toolCallId ?? '', content: m.content }],
+          };
+        }
+        return { role: m.role as 'user' | 'assistant', content: m.content };
+      });
 
     // options.maxTokens is the FINAL output budget: BaseProvider.chatWithModel
     // already added the thinking allowance and clamped to the model's real
@@ -41,6 +60,15 @@ export class AnthropicProvider extends BaseProvider {
       max_tokens: options.maxTokens,
       ...(systemMessage ? { system: systemMessage.content } : {}),
       messages: conversationMessages,
+      ...(options.tools?.length
+        ? {
+            tools: options.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              input_schema: t.inputSchema,
+            })),
+          }
+        : {}),
     };
 
     if (useThinking) {
@@ -68,6 +96,9 @@ export class AnthropicProvider extends BaseProvider {
     // still delivered via finalMessage() below.
     stream.on('thinking', (delta: string) => observers.onThinking(delta));
     stream.on('text', (delta: string) => observers.onText(delta));
+    stream.on('contentBlock', (block: Anthropic.ContentBlock) => {
+      if (block.type === 'tool_use') observers.onToolUse?.(block.name);
+    });
     stream.on('error', () => { /* delivered via finalMessage() rejection */ });
 
     const response = await stream.finalMessage();
@@ -78,11 +109,21 @@ export class AnthropicProvider extends BaseProvider {
       .map((block) => block.text)
       .join('');
 
+    // Tool calls the model requested (stop_reason 'tool_use').
+    const toolCalls = response.content
+      .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
+      .map((block) => ({
+        id: block.id,
+        name: block.name,
+        input: (block.input ?? {}) as Record<string, unknown>,
+      }));
+
     return {
       content,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
       stopReason: response.stop_reason,
+      ...(toolCalls.length ? { toolCalls } : {}),
     };
   }
 

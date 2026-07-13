@@ -111,3 +111,51 @@ describe('OpenAIProvider SSE parsing', () => {
     expect(err.retryAfterHeader).toBe('2');
   });
 });
+
+describe('OpenAIProvider tool calling', () => {
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  it('accumulates fragmented tool_calls by index and normalizes the stop reason', async () => {
+    global.fetch = jest.fn().mockResolvedValue(sseResponse([
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'grep', arguments: '{"pat' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'tern":"x"}' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 1, id: 'c2', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] }, finish_reason: 'tool_calls' }] },
+    ])) as unknown as typeof fetch;
+
+    const { observers } = collector();
+    const provider = new TestOpenAI('https://api.test', 'key', ['m'], 0, 0);
+    const res = await provider.run('m', MESSAGES, OPTS, false, 0, observers, new AbortController().signal);
+
+    expect(res.stopReason).toBe('tool_use');
+    expect(res.toolCalls).toEqual([
+      { id: 'c1', name: 'grep', input: { pattern: 'x' } },
+      { id: 'c2', name: 'read_file', input: { path: 'a.ts' } },
+    ]);
+  });
+
+  it('sends tools and maps tool-loop transcript messages to the OpenAI wire shapes', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(sseResponse([{ choices: [{ delta: { content: 'x' } }] }]));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { observers } = collector();
+    const provider = new TestOpenAI('https://api.test', 'key', ['m'], 0, 0);
+    const transcript: ChatMessage[] = [
+      { role: 'user', content: 'review this' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'grep', input: { pattern: 'x' } }] },
+      { role: 'tool', content: 'match', toolCallId: 'c1' },
+    ];
+    await provider.run('m', transcript, {
+      ...OPTS,
+      tools: [{ name: 'grep', description: 'search', inputSchema: { type: 'object' } }],
+    }, false, 0, observers, new AbortController().signal);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.tools).toEqual([
+      { type: 'function', function: { name: 'grep', description: 'search', parameters: { type: 'object' } } },
+    ]);
+    expect(body.messages[1].tool_calls[0]).toEqual(
+      { id: 'c1', type: 'function', function: { name: 'grep', arguments: '{"pattern":"x"}' } },
+    );
+    expect(body.messages[2]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'match' });
+  });
+});

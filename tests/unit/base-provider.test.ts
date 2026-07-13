@@ -288,3 +288,88 @@ describe('extractAdvertisedOutputCap', () => {
     )).toBeNull();
   });
 });
+
+describe('BaseProvider.chatWithTools (bounded tool loop)', () => {
+  const TOOL = { name: 'read_file', description: 'read a file', inputSchema: { type: 'object' } };
+  const toolUse = (calls: Array<{ id: string; name: string; input: Record<string, unknown> }>): ChatResponse =>
+    ({ content: '', inputTokens: 1, outputTokens: 1, stopReason: 'tool_use', toolCalls: calls });
+
+  it('executes requested tools in parallel and feeds results back until the model answers', async () => {
+    const provider = new FakeProvider(['m'], 2, 0, async ({ attempt, options }) => {
+      if (attempt === 1) {
+        expect(options.tools).toHaveLength(1);
+        return toolUse([{ id: 't1', name: 'read_file', input: { path: 'a.ts' } }]);
+      }
+      return OK;
+    });
+    const executed: string[] = [];
+
+    const { response, transcript } = await provider.chatWithTools(
+      MESSAGES, OPTS, [TOOL],
+      async (call) => { executed.push(call.name); return 'file body'; },
+      { maxRounds: 2, maxCalls: 6 },
+    );
+
+    expect(response.content).toBe('ok');
+    expect(executed).toEqual(['read_file']);
+    expect(transcript.map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(transcript[1].toolCalls).toHaveLength(1);
+    expect(transcript[2].content).toBe('file body');
+    expect(transcript[2].toolCallId).toBe('t1');
+  });
+
+  it('forces a tool-less final turn once rounds are exhausted, guaranteeing an answer', async () => {
+    const toolsSeen: boolean[] = [];
+    const provider = new FakeProvider(['m'], 2, 0, async ({ options }) => {
+      toolsSeen.push(Boolean(options.tools?.length));
+      if (options.tools?.length) {
+        return toolUse([{ id: 't1', name: 'read_file', input: {} }]);
+      }
+      return OK; // without tools the model must answer
+    });
+
+    const { response } = await provider.chatWithTools(
+      MESSAGES, OPTS, [TOOL], async () => 'x', { maxRounds: 1, maxCalls: 6 },
+    );
+
+    expect(response.content).toBe('ok');
+    expect(toolsSeen).toEqual([true, false]);
+  });
+
+  it('grants only the remaining call budget and answers denied calls with a budget message', async () => {
+    const provider = new FakeProvider(['m'], 2, 0, async ({ attempt }) => {
+      if (attempt === 1) {
+        return toolUse([
+          { id: 'a', name: 'read_file', input: {} },
+          { id: 'b', name: 'read_file', input: {} },
+          { id: 'c', name: 'read_file', input: {} },
+        ]);
+      }
+      return OK;
+    });
+    let executions = 0;
+
+    const { transcript } = await provider.chatWithTools(
+      MESSAGES, OPTS, [TOOL],
+      async () => { executions++; return 'data'; },
+      { maxRounds: 2, maxCalls: 2 },
+    );
+
+    expect(executions).toBe(2);
+    const toolMessages = transcript.filter((m) => m.role === 'tool');
+    expect(toolMessages).toHaveLength(3);
+    expect(toolMessages[2].content).toContain('budget exhausted');
+  });
+
+  it('returns immediately when the model answers without requesting tools', async () => {
+    const provider = new FakeProvider(['m'], 2, 0, async () => OK);
+
+    const { response, transcript } = await provider.chatWithTools(
+      MESSAGES, OPTS, [TOOL], async () => 'x', { maxRounds: 2, maxCalls: 6 },
+    );
+
+    expect(response.content).toBe('ok');
+    expect(transcript).toEqual(MESSAGES);
+    expect(provider.calls).toHaveLength(1);
+  });
+});
