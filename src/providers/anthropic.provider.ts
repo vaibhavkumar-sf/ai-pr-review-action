@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ChatMessage, ChatOptions, ChatResponse } from './ai-provider';
-import { BaseProvider, StreamObservers } from './base-provider';
+import { BaseProvider, extractAdvertisedOutputCap, StreamObservers } from './base-provider';
 import { PREFLIGHT_MAX_TOKENS, PREFLIGHT_TEMPERATURE, RETRYABLE_HTTP_STATUS } from '../config/limits';
 
 /**
@@ -33,11 +33,12 @@ export class AnthropicProvider extends BaseProvider {
         content: m.content,
       }));
 
-    // The thinking budget is added ON TOP of max_tokens (so it never starves
-    // the text output). When thinking is on, the API requires temperature 1.
+    // options.maxTokens is the FINAL output budget: BaseProvider.chatWithModel
+    // already added the thinking allowance and clamped to the model's real
+    // capacity. When thinking is on, the API requires temperature 1.
     const requestParams: Record<string, unknown> = {
       model,
-      max_tokens: options.maxTokens + (useThinking ? thinkingBudget : 0),
+      max_tokens: options.maxTokens,
       ...(systemMessage ? { system: systemMessage.content } : {}),
       messages: conversationMessages,
     };
@@ -152,6 +153,11 @@ export class AnthropicProvider extends BaseProvider {
 
   protected isRateLimitError(error: unknown): boolean {
     return error instanceof Anthropic.APIError && error.status === 429;
+  }
+
+  protected parseOutputCapError(error: unknown): number | null {
+    if (!(error instanceof Anthropic.APIError) || error.status !== 400) return null;
+    return extractAdvertisedOutputCap(error.message);
   }
 
   protected getRetryAfterMs(error: unknown): number {

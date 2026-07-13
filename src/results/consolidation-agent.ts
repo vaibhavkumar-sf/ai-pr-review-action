@@ -7,6 +7,7 @@ import {
   CONSOLIDATION_MAX_TOKENS,
   CONSOLIDATION_SKIP_THRESHOLD,
   CONSOLIDATION_TEMPERATURE,
+  OUTPUT_TOKENS_CEILING,
 } from '../config/limits';
 import * as core from '@actions/core';
 
@@ -14,11 +15,16 @@ import * as core from '@actions/core';
  * Uses an AI call to semantically consolidate findings from all agents,
  * catching duplicates that programmatic string matching misses.
  * Falls back to the original findings if the AI call fails.
+ *
+ * `configuredMaxTokens` mirrors the max_tokens input: 0 = auto (the model's
+ * full capacity — a truncated consolidation JSON would lose EVERY finding),
+ * positive = manual cap floored at CONSOLIDATION_MAX_TOKENS.
  */
 export async function consolidateFindings(
   findings: Finding[],
   provider: AIProvider,
   timeout: number,
+  configuredMaxTokens = 0,
 ): Promise<Finding[]> {
   // Skip consolidation if too few findings to have duplicates
   if (findings.length <= CONSOLIDATION_SKIP_THRESHOLD) {
@@ -35,7 +41,14 @@ export async function consolidateFindings(
         { role: 'system' as const, content: loadPrompt('system/consolidation') },
         { role: 'user' as const, content: userPrompt },
       ],
-      { maxTokens: CONSOLIDATION_MAX_TOKENS, temperature: CONSOLIDATION_TEMPERATURE, timeout },
+      {
+        maxTokens: configuredMaxTokens > 0
+          ? Math.max(configuredMaxTokens, CONSOLIDATION_MAX_TOKENS)
+          : OUTPUT_TOKENS_CEILING,
+        maxTokensAuto: configuredMaxTokens === 0,
+        temperature: CONSOLIDATION_TEMPERATURE,
+        timeout,
+      },
     );
 
     const consolidated = parseResponse(response.content, findings);

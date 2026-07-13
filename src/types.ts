@@ -101,6 +101,9 @@ export interface ActionConfig {
   // Model id, or a comma-separated fallback chain tried in order (the next is
   // used only when a model is rejected as unknown/unsupported by the endpoint).
   anthropicModel: string;
+  // Output-token cap per AI response. 0 (default) = auto: use the model's full
+  // native output capacity (OUTPUT_TOKENS_CEILING, clamped by any smaller cap
+  // the endpoint advertises via rejection). Positive = manual cap.
   maxTokens: number;
   // Extended-thinking budget in tokens, added on top of maxTokens. Directly
   // sets how long the model reasons before writing findings; 0 disables.

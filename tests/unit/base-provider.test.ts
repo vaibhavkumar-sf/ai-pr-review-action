@@ -1,5 +1,6 @@
 import { ChatMessage, ChatOptions, ChatResponse } from '../../src/providers/ai-provider';
-import { BaseProvider, StreamObservers } from '../../src/providers/base-provider';
+import { BaseProvider, extractAdvertisedOutputCap, StreamObservers } from '../../src/providers/base-provider';
+import { OUTPUT_TOKENS_CEILING } from '../../src/config/limits';
 
 // Silence @actions/core logging; the provider logs heavily via core.info/warning.
 jest.mock('@actions/core', () => ({
@@ -56,6 +57,10 @@ class FakeProvider extends BaseProvider {
   protected isThinkingUnsupportedError(e: unknown): boolean { return /NO_THINKING/.test(msg(e)); }
   protected getRetryAfterMs(e: unknown): number { return /RATE_LIMIT/.test(msg(e)) ? 5 : 0; }
   protected isRateLimitError(e: unknown): boolean { return /RATE_LIMIT/.test(msg(e)); }
+  protected parseOutputCapError(e: unknown): number | null {
+    const m = msg(e).match(/OUTPUT_CAP:(\d+)/);
+    return m ? parseInt(m[1], 10) : null;
+  }
 }
 
 const MESSAGES: ChatMessage[] = [{ role: 'user', content: 'hi' }];
@@ -178,5 +183,53 @@ describe('BaseProvider engine', () => {
     provider.probeHandler = async () => { throw new Error('401 unauthorized'); };
 
     await expect(provider.verifyConnection(1000)).rejects.toThrow(/pre-flight check failed/);
+  });
+
+  it('clamps the sent output budget to the assumed ceiling', async () => {
+    const seen: number[] = [];
+    const provider = new FakeProvider(['good'], 0, 0, async ({ options }) => {
+      seen.push(options.maxTokens);
+      return OK;
+    });
+
+    await provider.chat(MESSAGES, { ...OPTS, maxTokens: 500000 });
+    expect(seen).toEqual([OUTPUT_TOKENS_CEILING]);
+  });
+
+  it('discovers a smaller endpoint output cap from the rejection, retries clamped, and latches it', async () => {
+    const seen: number[] = [];
+    const provider = new FakeProvider(['good'], 0, 0, async ({ options }) => {
+      seen.push(options.maxTokens);
+      if (options.maxTokens > 64000) throw new Error('OUTPUT_CAP:64000');
+      return OK;
+    });
+
+    const res = await provider.chat(MESSAGES, { ...OPTS, maxTokens: 200000 });
+    expect(res.content).toBe('ok');
+    expect(seen).toEqual([OUTPUT_TOKENS_CEILING, 64000]);
+
+    // The discovered cap is latched: the next call is clamped up front.
+    await provider.chat(MESSAGES, { ...OPTS, maxTokens: 200000 });
+    expect(seen[2]).toBe(64000);
+  });
+});
+
+describe('extractAdvertisedOutputCap', () => {
+  it('parses the Anthropic-style rejection', () => {
+    expect(extractAdvertisedOutputCap(
+      'max_tokens: 131072 > 64000, which is the maximum allowed number of output tokens for claude-opus-4-8',
+    )).toBe(64000);
+  });
+
+  it('parses the OpenAI-style rejection', () => {
+    expect(extractAdvertisedOutputCap(
+      'max_tokens is too large: 131072. This model supports at most 16384 completion tokens',
+    )).toBe(16384);
+  });
+
+  it('ignores context-length errors', () => {
+    expect(extractAdvertisedOutputCap(
+      "This model's maximum context length is 200000 tokens. However, your messages resulted in 250000 tokens",
+    )).toBeNull();
   });
 });

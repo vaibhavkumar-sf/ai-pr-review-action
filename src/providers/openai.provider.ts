@@ -1,5 +1,5 @@
 import { ChatMessage, ChatOptions, ChatResponse } from './ai-provider';
-import { BaseProvider, StreamObservers } from './base-provider';
+import { BaseProvider, extractAdvertisedOutputCap, StreamObservers } from './base-provider';
 import { PREFLIGHT_MAX_TOKENS, PREFLIGHT_TEMPERATURE, RETRYABLE_HTTP_STATUS } from '../config/limits';
 
 /**
@@ -57,10 +57,12 @@ export class OpenAIProvider extends BaseProvider {
     observers: StreamObservers,
     signal: AbortSignal,
   ): Promise<ChatResponse> {
+    // options.maxTokens is the FINAL output budget: BaseProvider.chatWithModel
+    // already added the thinking allowance and clamped to the model's real capacity.
     const body: Record<string, unknown> = {
       model,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
-      max_tokens: options.maxTokens + (useThinking ? thinkingBudget : 0),
+      max_tokens: options.maxTokens,
       temperature: options.temperature,
       stream: true,
       stream_options: { include_usage: true },
@@ -203,6 +205,11 @@ export class OpenAIProvider extends BaseProvider {
 
   protected isRateLimitError(error: unknown): boolean {
     return error instanceof OpenAIHttpError && error.status === 429;
+  }
+
+  protected parseOutputCapError(error: unknown): number | null {
+    if (!(error instanceof OpenAIHttpError) || error.status !== 400) return null;
+    return extractAdvertisedOutputCap(error.message);
   }
 
   protected getRetryAfterMs(error: unknown): number {
