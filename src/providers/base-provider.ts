@@ -6,7 +6,10 @@ import {
   OUTPUT_CAP_CLAMP_RETRIES,
   OUTPUT_TOKENS_CEILING,
   PREFLIGHT_TIMEOUT_MS,
+  RATE_LIMIT_DELAY_GROWTH,
   RATE_LIMIT_MAX_ATTEMPTS,
+  RATE_LIMIT_MAX_TOTAL_WAIT_MS,
+  RATE_LIMIT_RETRY_DELAY_MAX_MS,
   RATE_LIMIT_RETRY_DELAY_MS,
   THINKING_FLOOR_TOKENS,
   THINKING_SNIPPET_CHARS,
@@ -27,6 +30,20 @@ export interface StreamObservers {
  * completion tokens"). Returns null when the message is not about the output
  * cap (context-length errors are deliberately NOT matched).
  */
+/**
+ * Escalating wait before 429 retry number `retryCount` (0-based): starts at
+ * RATE_LIMIT_RETRY_DELAY_MS and grows by RATE_LIMIT_DELAY_GROWTH per
+ * consecutive 429, capped at RATE_LIMIT_RETRY_DELAY_MAX_MS. Fair-usage
+ * limiters punish request frequency — retrying on a fixed short cadence can
+ * keep re-tripping the very limit being waited out.
+ */
+export function rateLimitBackoffMs(retryCount: number): number {
+  return Math.min(
+    Math.round(RATE_LIMIT_RETRY_DELAY_MS * Math.pow(RATE_LIMIT_DELAY_GROWTH, retryCount)),
+    RATE_LIMIT_RETRY_DELAY_MAX_MS,
+  );
+}
+
 export function extractAdvertisedOutputCap(message: string): number | null {
   if (!/max_tokens|output tokens|completion tokens/i.test(message)) return null;
   const patterns = [
@@ -54,10 +71,11 @@ export function extractAdvertisedOutputCap(message: string): number | null {
  * - Pre-flight probe: a tiny request that resolves the working model and
  *   fails fast (and loudly) on a hung/unreachable endpoint.
  * - Retry with backoff: Retry-After header respected; rate limits (429) get
- *   their own patient budget (up to RATE_LIMIT_MAX_ATTEMPTS retries at a fixed
- *   short delay, independent of max_retries), other transient errors back off
- *   exponentially; timeouts are TERMINAL (a retry would just burn another full
- *   timeout window on the same slow call).
+ *   their own patient budget (up to RATE_LIMIT_MAX_ATTEMPTS retries with an
+ *   ESCALATING wait, independent of max_retries — polite polling, not
+ *   hammering), other transient errors back off exponentially; timeouts are
+ *   TERMINAL (a retry would just burn another full timeout window on the
+ *   same slow call).
  * - Streaming heartbeat: periodic "thinking — N chars" log lines so a long
  *   call is visibly alive instead of silent.
  * - Thinking fallback: if the endpoint rejects the thinking param, it is
@@ -190,6 +208,7 @@ export abstract class BaseProvider implements AIProvider {
     // wait it out with the same patient budget the review calls use, instead
     // of killing the run before it even starts.
     let rateLimitRetries = 0;
+    let rateLimitWaitedMs = 0;
 
     for (let i = 0; i < candidates.length; i++) {
       const model = candidates[i];
@@ -231,12 +250,18 @@ export abstract class BaseProvider implements AIProvider {
         // healthy endpoint telling us to slow down.
         const retryAfterMs = this.getRetryAfterMs(error);
         const isRateLimit = retryAfterMs > 0 || this.isRateLimitError(error);
-        if (!timedOut && isRateLimit && rateLimitRetries < RATE_LIMIT_MAX_ATTEMPTS) {
+        if (
+          !timedOut && isRateLimit
+          && rateLimitRetries < RATE_LIMIT_MAX_ATTEMPTS
+          && rateLimitWaitedMs < RATE_LIMIT_MAX_TOTAL_WAIT_MS
+        ) {
+          const delayMs = retryAfterMs > 0 ? retryAfterMs : rateLimitBackoffMs(rateLimitRetries);
           rateLimitRetries += 1;
-          const delayMs = retryAfterMs > 0 ? retryAfterMs : RATE_LIMIT_RETRY_DELAY_MS;
+          rateLimitWaitedMs += delayMs;
           core.warning(
             `Pre-flight: ${model} rate limited — waiting ${Math.round(delayMs / 1000)}s before `
-            + `retry ${rateLimitRetries}/${RATE_LIMIT_MAX_ATTEMPTS}: `
+            + `retry ${rateLimitRetries}/${RATE_LIMIT_MAX_ATTEMPTS} `
+            + `(${Math.round(rateLimitWaitedMs / 1000)}s waited in total): `
             + `${error instanceof Error ? error.message : String(error)}`,
           );
           await this.delay(delayMs);
@@ -323,6 +348,7 @@ export abstract class BaseProvider implements AIProvider {
     // patience (many short waits), everything else transient gets the small
     // user-configured max_retries with exponential backoff.
     let rateLimitRetries = 0;
+    let rateLimitWaitedMs = 0;
     let transientRetries = 0;
     // Bounded retries after the endpoint rejects max_tokens as above the
     // model's real capacity (the rejection states the real maximum).
@@ -466,16 +492,25 @@ export abstract class BaseProvider implements AIProvider {
         const retryAfterMs = this.getRetryAfterMs(error);
         const isRateLimit = retryAfterMs > 0 || this.isRateLimitError(error);
 
-        // Rate limit (429): wait a short fixed delay (or Retry-After if longer)
-        // and try again, up to RATE_LIMIT_MAX_ATTEMPTS — independent of the
-        // max_retries budget, because 429s clear with patience, not with speed.
-        if (isRateLimit && rateLimitRetries < RATE_LIMIT_MAX_ATTEMPTS) {
+        // Rate limit (429): wait and try again, up to RATE_LIMIT_MAX_ATTEMPTS
+        // and RATE_LIMIT_MAX_TOTAL_WAIT_MS — independent of the max_retries
+        // budget, because 429s clear with patience, not with speed. The wait
+        // ESCALATES while 429s persist (Retry-After takes precedence): a
+        // fair-usage limiter punishes request frequency, so polling politely
+        // beats hammering on a fixed short cadence.
+        if (
+          isRateLimit
+          && rateLimitRetries < RATE_LIMIT_MAX_ATTEMPTS
+          && rateLimitWaitedMs < RATE_LIMIT_MAX_TOTAL_WAIT_MS
+        ) {
+          const delayMs = retryAfterMs > 0 ? retryAfterMs : rateLimitBackoffMs(rateLimitRetries);
           rateLimitRetries += 1;
-          const delayMs = retryAfterMs > 0 ? retryAfterMs : RATE_LIMIT_RETRY_DELAY_MS;
+          rateLimitWaitedMs += delayMs;
           core.warning(
             `${model} attempt ${attemptsMade} failed after ${attemptSec}s: ${lastError.message}. `
             + `Rate limited — waiting ${Math.round(delayMs / 1000)}s before retry `
-            + `${rateLimitRetries}/${RATE_LIMIT_MAX_ATTEMPTS}`,
+            + `${rateLimitRetries}/${RATE_LIMIT_MAX_ATTEMPTS} `
+            + `(${Math.round(rateLimitWaitedMs / 1000)}s waited in total)`,
           );
           await this.delay(delayMs);
           continue;
