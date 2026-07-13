@@ -325,7 +325,7 @@ export const INPUTS: readonly InputSpec[] = [
     type: 'number',
     default: '3',
     group: 'Advanced',
-    description: 'Maximum retries per agent on AI API failure',
+    description: 'Maximum retries per agent on transient AI API failure (5xx/network). Rate limits (429) retry on their own patient budget — up to 400 attempts, ~10s apart — independent of this setting',
   },
   {
     name: 'debug',

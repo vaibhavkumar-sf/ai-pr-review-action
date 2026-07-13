@@ -9,9 +9,12 @@ import {
   COMPACT_INPUT_TOKENS,
   CONTEXT_SAFETY_MARGIN_TOKENS,
   ERROR_SNIPPET_CHARS,
+  OUTPUT_TOKENS_CEILING,
   PROMPT_CLAMP_FLOOR_TOKENS,
   PROMPT_MAX_FILE_CHARS,
   PROMPT_TRIM_STAGES,
+  TRUNCATION_RETRY_MAX_ESCALATIONS,
+  TRUNCATION_RETRY_TOKENS_MULTIPLIER,
 } from '../config/limits';
 import * as core from '@actions/core';
 
@@ -84,18 +87,48 @@ export abstract class BaseAgent {
           + `(stop_reason=${response.stopReason}); retrying with a compact diff-only prompt`,
         );
         response = await this.provider.chat(this.buildCompactMessages(context), chatOpts);
-      } else if (!this.tryParseResponse(response.content)) {
+      }
+
+      // Output-budget escalation: the response hit max_tokens without parseable
+      // findings JSON. Two causes, one cure — runaway thinking that ate the whole
+      // budget (GLM can ignore budget_tokens; text is then EMPTY), or a big PR
+      // whose findings genuinely need more room (text is truncated JSON). Retry
+      // with thinking disabled and an escalating output budget, so a user's
+      // review never fails because our cap was too small.
+      let escalatedTokens = maxTokens;
+      for (
+        let escalation = 0;
+        response.stopReason === 'max_tokens'
+          && !this.tryParseResponse(response.content)
+          && escalation < TRUNCATION_RETRY_MAX_ESCALATIONS
+          && escalatedTokens < OUTPUT_TOKENS_CEILING;
+        escalation++
+      ) {
+        escalatedTokens = Math.min(escalatedTokens * TRUNCATION_RETRY_TOKENS_MULTIPLIER, OUTPUT_TOKENS_CEILING);
+        core.warning(
+          `Agent ${this.name}: response hit max_tokens with `
+          + `${response.content.length === 0 ? 'NO text (thinking consumed the whole output budget)' : `truncated JSON (text_len=${response.content.length})`}; `
+          + `retrying with thinking disabled and max_tokens=${escalatedTokens} `
+          + `(escalation ${escalation + 1}/${TRUNCATION_RETRY_MAX_ESCALATIONS})`,
+        );
+        response = await this.provider.chat(messages, {
+          ...chatOpts,
+          maxTokens: escalatedTokens,
+          thinkingBudget: 0,
+        });
+      }
+
+      if (!this.tryParseResponse(response.content)) {
         // Response had no parseable JSON (prose, wrapped/trailing text, or truncated
         // JSON). Feed the broken output back and ask once more for JSON only.
-        // Extended thinking stays enabled — its budget is on top of maxTokens.
         core.warning(
-          `Agent ${this.name}: first response had no parseable JSON `
+          `Agent ${this.name}: response had no parseable JSON `
           + `(stop_reason=${response.stopReason ?? 'unknown'}, `
           + `text_len=${response.content.length}); auto-healing with a JSON-only retry`,
         );
         response = await this.provider.chat(
           this.buildRepairMessages(messages, response.content),
-          chatOpts,
+          { ...chatOpts, maxTokens: escalatedTokens },
         );
       }
 

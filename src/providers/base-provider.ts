@@ -4,8 +4,10 @@ import {
   CHARS_PER_TOKEN,
   HEARTBEAT_INTERVAL_MS,
   PREFLIGHT_TIMEOUT_MS,
-  RATE_LIMIT_BACKOFF_STEP_MS,
+  RATE_LIMIT_MAX_ATTEMPTS,
+  RATE_LIMIT_RETRY_DELAY_MS,
   THINKING_FLOOR_TOKENS,
+  THINKING_SNIPPET_CHARS,
   TRANSIENT_BACKOFF_BASE_MS,
 } from '../config/limits';
 
@@ -24,9 +26,11 @@ export interface StreamObservers {
  *   later calls.
  * - Pre-flight probe: a tiny request that resolves the working model and
  *   fails fast (and loudly) on a hung/unreachable endpoint.
- * - Retry with backoff: Retry-After header respected, rate limits back off in
- *   30s steps, transient errors exponentially; timeouts are TERMINAL (a retry
- *   would just burn another full timeout window on the same slow call).
+ * - Retry with backoff: Retry-After header respected; rate limits (429) get
+ *   their own patient budget (up to RATE_LIMIT_MAX_ATTEMPTS retries at a fixed
+ *   short delay, independent of max_retries), other transient errors back off
+ *   exponentially; timeouts are TERMINAL (a retry would just burn another full
+ *   timeout window on the same slow call).
  * - Streaming heartbeat: periodic "thinking — N chars" log lines so a long
  *   call is visibly alive instead of silent.
  * - Thinking fallback: if the endpoint rejects the thinking param, it is
@@ -263,14 +267,22 @@ export abstract class BaseProvider implements AIProvider {
 
     let lastError: Error | undefined;
     let attemptsMade = 0;
+    // Two independent retry budgets: 429s are quota churn that clears with
+    // patience (many short waits), everything else transient gets the small
+    // user-configured max_retries with exponential backoff.
+    let rateLimitRetries = 0;
+    let transientRetries = 0;
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      attemptsMade = attempt + 1;
+    while (true) {
+      attemptsMade += 1;
       const attemptStart = Date.now();
       // Streaming progress trackers, so the log shows the call is alive and we can
       // tell a slow-to-start call (no output) from a slow thinking/generation one.
       let thinkingChars = 0;
       let textChars = 0;
+      // Head of the thinking stream, kept so a "no findings text" failure can log
+      // WHAT the model was doing instead of writing findings.
+      let thinkingSnippet = '';
       let timedOut = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       const abortController = new AbortController();
@@ -282,7 +294,7 @@ export abstract class BaseProvider implements AIProvider {
 
       try {
         core.info(
-          `Calling ${model} (attempt ${attempt + 1}/${this.maxRetries + 1}, `
+          `Calling ${model} (attempt ${attemptsMade}, `
           + `thinking=${useThinking ? `on/${thinkingBudget}tok` : 'off'})…`,
         );
 
@@ -307,7 +319,12 @@ export abstract class BaseProvider implements AIProvider {
           useThinking,
           thinkingBudget,
           {
-            onThinking: (delta) => { thinkingChars += delta.length; },
+            onThinking: (delta) => {
+              thinkingChars += delta.length;
+              if (thinkingSnippet.length < THINKING_SNIPPET_CHARS) {
+                thinkingSnippet += delta.slice(0, THINKING_SNIPPET_CHARS - thinkingSnippet.length);
+              }
+            },
             onText: (delta) => { textChars += delta.length; },
           },
           abortController.signal,
@@ -318,6 +335,19 @@ export abstract class BaseProvider implements AIProvider {
           + `(${response.inputTokens} in / ${response.outputTokens} out tok, `
           + `stop_reason=${response.stopReason ?? 'n/a'})`,
         );
+
+        // Thinking-starvation diagnostic: the call "succeeded" but every output
+        // token went to thinking and none to findings text (endpoints like GLM
+        // can ignore budget_tokens). Log the head of the thinking stream so the
+        // failure is debuggable from the Action log alone.
+        if (response.content.trim().length === 0 && thinkingChars > 0) {
+          core.warning(
+            `${model}: response has NO text — all ${response.outputTokens} output tokens went to `
+            + `thinking (${thinkingChars} chars, stop_reason=${response.stopReason ?? 'n/a'}). `
+            + `First ${Math.min(thinkingSnippet.length, THINKING_SNIPPET_CHARS)} thinking chars: `
+            + `${thinkingSnippet.replace(/\s+/g, ' ').trim() || '(empty)'}`,
+          );
+        }
 
         return response;
       } catch (error: unknown) {
@@ -340,7 +370,7 @@ export abstract class BaseProvider implements AIProvider {
         }
 
         // If thinking fails (unsupported model/provider), retry without it
-        if (useThinking && attempt === 0 && !timedOut && this.isThinkingUnsupportedError(error)) {
+        if (useThinking && attemptsMade === 1 && !timedOut && this.isThinkingUnsupportedError(error)) {
           core.info('Extended thinking not supported, falling back to standard mode');
           this.thinkingDisabled = true;
           useThinking = false;
@@ -350,35 +380,45 @@ export abstract class BaseProvider implements AIProvider {
         // A timeout is terminal: a retry just burns another full timeout window on
         // the same slow call. Report it clearly and stop trying this model.
         if (timedOut) {
-          core.warning(`${model} attempt ${attempt + 1}: ${lastError.message}`);
+          core.warning(`${model} attempt ${attemptsMade}: ${lastError.message}`);
           break;
         }
 
-        if (this.isRetryableError(error) && attempt < this.maxRetries) {
-          const retryAfterMs = this.getRetryAfterMs(error);
-          const isRateLimit = retryAfterMs > 0 || this.isRateLimitError(error);
+        const retryAfterMs = this.getRetryAfterMs(error);
+        const isRateLimit = retryAfterMs > 0 || this.isRateLimitError(error);
 
-          // Rate limit: use Retry-After header, or 30s, 60s, 90s, 120s
-          // Other transient errors: 2s, 4s, 8s
-          const delayMs = retryAfterMs > 0
-            ? retryAfterMs
-            : isRateLimit
-              ? (attempt + 1) * RATE_LIMIT_BACKOFF_STEP_MS
-              : Math.pow(2, attempt + 1) * TRANSIENT_BACKOFF_BASE_MS;
+        // Rate limit (429): wait a short fixed delay (or Retry-After if longer)
+        // and try again, up to RATE_LIMIT_MAX_ATTEMPTS — independent of the
+        // max_retries budget, because 429s clear with patience, not with speed.
+        if (isRateLimit && rateLimitRetries < RATE_LIMIT_MAX_ATTEMPTS) {
+          rateLimitRetries += 1;
+          const delayMs = retryAfterMs > 0 ? retryAfterMs : RATE_LIMIT_RETRY_DELAY_MS;
           core.warning(
-            `${model} attempt ${attempt + 1} failed after ${attemptSec}s: ${lastError.message}. `
-            + `Retrying in ${delayMs / 1000}s${isRateLimit ? ' — rate limited' : ''}`,
+            `${model} attempt ${attemptsMade} failed after ${attemptSec}s: ${lastError.message}. `
+            + `Rate limited — waiting ${Math.round(delayMs / 1000)}s before retry `
+            + `${rateLimitRetries}/${RATE_LIMIT_MAX_ATTEMPTS}`,
           );
           await this.delay(delayMs);
           continue;
         }
 
-        if (!this.isRetryableError(error)) {
+        // Other transient errors: exponential backoff (2s, 4s, 8s, …) within max_retries.
+        if (!isRateLimit && this.isRetryableError(error) && transientRetries < this.maxRetries) {
+          transientRetries += 1;
+          const delayMs = Math.pow(2, transientRetries) * TRANSIENT_BACKOFF_BASE_MS;
           core.warning(
-            `${model} attempt ${attempt + 1} failed after ${attemptSec}s (not retryable): ${lastError.message}`,
+            `${model} attempt ${attemptsMade} failed after ${attemptSec}s: ${lastError.message}. `
+            + `Retrying in ${delayMs / 1000}s (${transientRetries}/${this.maxRetries})`,
           );
-          break;
+          await this.delay(delayMs);
+          continue;
         }
+
+        core.warning(
+          `${model} attempt ${attemptsMade} failed after ${attemptSec}s `
+          + `(${this.isRetryableError(error) ? 'retries exhausted' : 'not retryable'}): ${lastError.message}`,
+        );
+        break;
       } finally {
         clearTimeout(timeoutId);
         if (heartbeat) clearInterval(heartbeat);
