@@ -5,6 +5,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   OUTPUT_CAP_CLAMP_RETRIES,
   OUTPUT_TOKENS_CEILING,
+  PREFLIGHT_HANG_MAX_RETRIES,
   PREFLIGHT_TIMEOUT_MS,
   RATE_LIMIT_DELAY_GROWTH,
   RATE_LIMIT_MAX_ATTEMPTS,
@@ -209,6 +210,13 @@ export abstract class BaseProvider implements AIProvider {
     // of killing the run before it even starts.
     let rateLimitRetries = 0;
     let rateLimitWaitedMs = 0;
+    // A hung probe (no first token within the timeout) is retried too, on its
+    // own small budget: fair-usage limiters sometimes stall connections
+    // instead of returning a clean 429 (observed on z.ai right after a run of
+    // 429s — the endpoint was alive). Each hang already costs a full probe
+    // timeout, so this budget stays small to keep a truly dead endpoint
+    // failing in minutes, not hours.
+    let hangRetries = 0;
 
     for (let i = 0; i < candidates.length; i++) {
       const model = candidates[i];
@@ -268,11 +276,33 @@ export abstract class BaseProvider implements AIProvider {
           i -= 1; // re-run this candidate
           continue;
         }
-        // Connectivity/timeout/auth failure — record a clear message and stop.
+        // Hung probe: back off and re-probe the same candidate a few times —
+        // during a throttled spell the limiter may stall connections rather
+        // than answer 429, and one 45s hang should not kill the whole run.
+        if (
+          timedOut
+          && hangRetries < PREFLIGHT_HANG_MAX_RETRIES
+          && rateLimitWaitedMs < RATE_LIMIT_MAX_TOTAL_WAIT_MS
+        ) {
+          const delayMs = rateLimitBackoffMs(hangRetries);
+          hangRetries += 1;
+          rateLimitWaitedMs += delayMs;
+          core.warning(
+            `Pre-flight: ${model} hung (no first token within ${Math.round(timeoutMs / 1000)}s) — `
+            + `endpoint may be overloaded or throttling; waiting ${Math.round(delayMs / 1000)}s before `
+            + `retry ${hangRetries}/${PREFLIGHT_HANG_MAX_RETRIES}`,
+          );
+          await this.delay(delayMs);
+          i -= 1; // re-run this candidate
+          continue;
+        }
+        // Connectivity/auth failure, or hang budget exhausted — record a clear
+        // message and stop.
         lastError = timedOut
           ? new Error(
               `${model} did not respond within ${Math.round(timeoutMs / 1000)}s `
-              + '(endpoint hung — no first token). The AI endpoint is unreachable or overloaded.',
+              + `(endpoint hung — no first token) on ${hangRetries + 1} attempts. `
+              + 'The AI endpoint is unreachable or overloaded.',
             )
           : error instanceof Error ? error : new Error(String(error));
         break;
@@ -566,7 +596,8 @@ export abstract class BaseProvider implements AIProvider {
       || model.includes('glm');
   }
 
-  private delay(ms: number): Promise<void> {
+  /** Overridable in tests so backoff schedules run instantly. */
+  protected delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
