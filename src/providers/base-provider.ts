@@ -156,6 +156,10 @@ export abstract class BaseProvider implements AIProvider {
   async verifyConnection(timeoutMs: number = PREFLIGHT_TIMEOUT_MS): Promise<ConnectionCheckResult> {
     const candidates = this.resolvedModel ? [this.resolvedModel] : this.models;
     let lastError: Error | undefined;
+    // A 429 on the pre-flight probe is quota churn, not a broken endpoint —
+    // wait it out with the same patient budget the review calls use, instead
+    // of killing the run before it even starts.
+    let rateLimitRetries = 0;
 
     for (let i = 0; i < candidates.length; i++) {
       const model = candidates[i];
@@ -190,6 +194,23 @@ export abstract class BaseProvider implements AIProvider {
             `Pre-flight: model "${model}" rejected as unknown`
             + (next ? `; trying "${next}"` : ' — no more fallbacks'),
           );
+          continue;
+        }
+        // Rate limited: wait and re-probe the SAME candidate — the whole point
+        // of pre-flight is to fail fast on a broken endpoint, and a 429 is a
+        // healthy endpoint telling us to slow down.
+        const retryAfterMs = this.getRetryAfterMs(error);
+        const isRateLimit = retryAfterMs > 0 || this.isRateLimitError(error);
+        if (!timedOut && isRateLimit && rateLimitRetries < RATE_LIMIT_MAX_ATTEMPTS) {
+          rateLimitRetries += 1;
+          const delayMs = retryAfterMs > 0 ? retryAfterMs : RATE_LIMIT_RETRY_DELAY_MS;
+          core.warning(
+            `Pre-flight: ${model} rate limited — waiting ${Math.round(delayMs / 1000)}s before `
+            + `retry ${rateLimitRetries}/${RATE_LIMIT_MAX_ATTEMPTS}: `
+            + `${error instanceof Error ? error.message : String(error)}`,
+          );
+          await this.delay(delayMs);
+          i -= 1; // re-run this candidate
           continue;
         }
         // Connectivity/timeout/auth failure — record a clear message and stop.
