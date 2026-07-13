@@ -111,6 +111,37 @@ describe('BaseProvider engine', () => {
     expect(provider.calls).toHaveLength(2);
   });
 
+  it('retries 429s on their own patient budget, far beyond max_retries', async () => {
+    let n = 0;
+    const provider = new FakeProvider(['good'], 1, 0, async () => {
+      n += 1;
+      if (n <= 6) throw new Error('RATE_LIMIT: 429');
+      return OK;
+    });
+
+    // maxRetries=1 would allow only 2 attempts; the rate-limit budget keeps going.
+    const res = await provider.chat(MESSAGES, OPTS);
+    expect(res.content).toBe('ok');
+    expect(provider.calls).toHaveLength(7);
+  });
+
+  it('transient (non-429) errors still respect the max_retries budget', async () => {
+    const provider = new FakeProvider(['good'], 0, 0, async () => {
+      throw new Error('RETRYABLE: 503');
+    });
+    await expect(provider.chat(MESSAGES, OPTS)).rejects.toThrow(/failed after 1 attempt/);
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('gives up with a clear error once the 429 budget is exhausted', async () => {
+    const provider = new FakeProvider(['good'], 0, 0, async () => {
+      throw new Error('RATE_LIMIT: 429');
+    });
+    // RATE_LIMIT_MAX_ATTEMPTS retries + the initial attempt = 401 calls.
+    await expect(provider.chat(MESSAGES, OPTS)).rejects.toThrow(/failed after 401 attempt/);
+    expect(provider.calls).toHaveLength(401);
+  }, 60000);
+
   it('throws a clear error when every candidate is rejected as unknown', async () => {
     const provider = new FakeProvider(['a', 'b'], 1, 0, async () => {
       throw new Error('UNKNOWN_MODEL');

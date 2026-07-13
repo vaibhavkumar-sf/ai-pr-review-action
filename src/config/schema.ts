@@ -325,7 +325,14 @@ export const INPUTS: readonly InputSpec[] = [
     type: 'number',
     default: '3',
     group: 'Advanced',
-    description: 'Maximum retries per agent on AI API failure',
+    description: 'Maximum retries per agent on transient AI API failure (5xx/network). Rate limits (429) retry on their own patient budget — up to 400 attempts, ~10s apart — independent of this setting',
+  },
+  {
+    name: 'cancel_on_pr_close',
+    type: 'boolean',
+    default: 'true',
+    group: 'Advanced',
+    description: 'Cancel the review run (neutral exit, not a failure) if the PR is closed or merged while the review is still running, freeing the runner and AI quota',
   },
   {
     name: 'debug',

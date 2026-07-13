@@ -163,6 +163,7 @@ export interface ActionConfig {
   // Advanced
   agentTimeout: number;
   maxRetries: number;
+  cancelOnPrClose: boolean;
   debug: boolean;
 }
 

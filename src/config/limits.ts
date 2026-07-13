@@ -88,8 +88,16 @@ export const BACKSTAGE_TIMEOUT_MS = 10000;
 /** HTTP statuses worth retrying: 429=rate limit, 5xx=transient, 529=overloaded. */
 export const RETRYABLE_HTTP_STATUS = [429, 500, 502, 503, 529];
 
-/** Rate-limit (429) backoff step: 30s, 60s, 90s, … per attempt (unless Retry-After says otherwise). */
-export const RATE_LIMIT_BACKOFF_STEP_MS = 30000;
+/**
+ * Rate limits (429) get their own patient retry budget, independent of
+ * max_retries: quota churn on shared endpoints clears in seconds-to-minutes,
+ * and a long wait beats failing the whole review run. 400 × 10s ≈ 67 min of
+ * waiting worst case; the GitHub job timeout is the effective backstop.
+ */
+export const RATE_LIMIT_MAX_ATTEMPTS = 400;
+
+/** Fixed wait between 429 retries (unless Retry-After asks for more). */
+export const RATE_LIMIT_RETRY_DELAY_MS = 10000;
 
 /** Transient-error backoff base: 2s, 4s, 8s, … (exponential per attempt). */
 export const TRANSIENT_BACKOFF_BASE_MS = 1000;
@@ -135,6 +143,27 @@ export const REPLY_CODE_CONTEXT_LINES = 60;
 /** Unparseable-response snippet length in warnings, in chars. */
 export const ERROR_SNIPPET_CHARS = 300;
 
+/** Thinking-stream snippet kept for debugging when a call produces no findings text. */
+export const THINKING_SNIPPET_CHARS = 800;
+
+/**
+ * When a response stops at max_tokens without parseable findings JSON (either
+ * runaway thinking ate the whole budget — GLM can ignore budget_tokens — or a
+ * big PR's findings genuinely need more room), the call is retried with
+ * thinking disabled and the output budget multiplied by this factor, escalating
+ * per retry. A user's review must never fail because OUR output cap was too small.
+ */
+export const TRUNCATION_RETRY_TOKENS_MULTIPLIER = 2;
+
+/** Max escalation retries after max_tokens truncation (16k → 32k → 64k → 128k). */
+export const TRUNCATION_RETRY_MAX_ESCALATIONS = 3;
+
+/**
+ * Ceiling for escalated max_tokens — the output-token maximum typical endpoints
+ * (GLM-5.x, Claude Opus/Sonnet) accept; asking beyond it gets a 400 rejection.
+ */
+export const OUTPUT_TOKENS_CEILING = 131072;
+
 // ─── Deduplication & thread matching ────────────────────────────────────────
 
 /** Findings within this many lines of each other are dedup candidates. */
@@ -162,6 +191,12 @@ export const STALE_THREAD_PROXIMITY = 3;
 
 /** Page size for GitHub REST/GraphQL list calls. */
 export const GITHUB_PER_PAGE = 100;
+
+/**
+ * How often the run polls the PR's open/closed state so a review of a
+ * closed/merged PR is cancelled promptly without burning API quota.
+ */
+export const PR_STATE_POLL_INTERVAL_MS = 30000;
 
 /** Max comments fetched per review thread. */
 export const THREAD_COMMENTS_PAGE = 30;

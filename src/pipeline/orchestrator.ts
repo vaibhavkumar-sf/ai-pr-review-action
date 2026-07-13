@@ -6,6 +6,7 @@ import { AIProvider } from '../providers/ai-provider';
 import { createAIProvider } from '../providers/provider-factory';
 import { BaseAgent, createAgents } from '../agents';
 import { PRCommenter } from '../github/pr-commenter';
+import { startPrStateWatcher } from '../github/pr-state-watcher';
 import { InlineReviewer } from '../github/inline-reviewer';
 import { ReplyHandler } from '../github/reply-handler';
 import { parseDiff } from '../github/diff-parser';
@@ -14,6 +15,7 @@ import { reportRunOutcome, reportToBackstage, RunActivityStats } from '../result
 import { appendToPRDescription } from './description-updater';
 import { runPhase } from './phase';
 import { isTestFile } from '../config/patterns';
+import { ERROR_SNIPPET_CHARS } from '../config/limits';
 import { INLINE_SEVERITIES } from '../config/taxonomy';
 import { logger, writeJobSummary } from '../utils/logger';
 import { formatDuration } from '../utils/text';
@@ -27,6 +29,13 @@ export async function runReview(config: ActionConfig): Promise<void> {
   const octokit = new Octokit({ auth: config.githubToken });
   const commenter = new PRCommenter(octokit, config.owner, config.repo, config.prNumber);
 
+  // Cancel the run (neutral exit) if the PR is closed/merged mid-review —
+  // long waits (429 patience, slow models) must not burn a runner for a PR
+  // nobody can act on anymore.
+  const stopPrWatcher = config.cancelOnPrClose
+    ? startPrStateWatcher(octokit, config)
+    : (): void => undefined;
+
   try {
     await runPipeline(config, octokit, commenter);
   } catch (error) {
@@ -37,6 +46,8 @@ export async function runReview(config: ActionConfig): Promise<void> {
       await reportRunOutcome(config, 'failed', msg);
     }
     throw error;
+  } finally {
+    stopPrWatcher();
   }
 }
 
@@ -135,6 +146,33 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
   // the raw candidate chain, so PR comments and Backstage record the real model.
   config.anthropicModel = provider.getResolvedModel();
 
+  // ── Guard: every agent's AI call failed ────────────────────────────────────
+  // Posting a "0 findings" review here would be a lie — nothing was reviewed.
+  // Say so plainly on the PR, mark the run failed, and stop.
+  const failedAgents = agentResults.filter(r => r.error);
+  if (agentResults.length > 0 && failedAgents.length === agentResults.length) {
+    const details = failedAgents
+      .map(r => `- **${r.agentName}**: ${truncateError(r.error ?? 'unknown error')}`)
+      .join('\n');
+    await commenter.postOrUpdateComment(
+      `## ❌ AI Code Review — Failed\n\n` +
+      `The AI call failed for every review agent, so **no code was reviewed** ` +
+      `(this is not a clean review).\n\n${details}\n\n` +
+      `Common causes: the AI endpoint rate-limited the run (HTTP 429) or the call timed out. ` +
+      `**Re-run the workflow** to retry; if rate limits persist, wait a few minutes first.`,
+    );
+    core.setOutput('review_status', 'failed');
+    core.setOutput('skip_reason', 'ai_call_failed');
+    core.setOutput('total_findings', 0);
+    core.setOutput('agents_failed', failedAgents.map(r => r.agentName).join(','));
+    if (config.postDataUrl) await reportRunOutcome(config, 'failed', 'ai_call_failed');
+    core.setFailed(
+      `AI review failed: all ${agentResults.length} agent AI call(s) failed ` +
+      `(${failedAgents.map(r => r.agentName).join(', ')}). Re-run the workflow to retry.`,
+    );
+    return;
+  }
+
   // ── Phase 5: dedup + consolidation + merge (critical) ─────────────────────
   const { merged, consolidated } = await runPhase('Consolidation', { critical: true }, () =>
     consolidateResults(agentResults, config, provider, commenter),
@@ -223,6 +261,12 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
       `${merged.mediumCount} medium findings (threshold: ${config.failThreshold})`,
     );
   }
+}
+
+/** Caps an agent error (may embed a whole API error JSON) for the PR comment. */
+function truncateError(message: string): string {
+  const oneLine = message.replace(/\s+/g, ' ').trim();
+  return oneLine.length > ERROR_SNIPPET_CHARS ? `${oneLine.slice(0, ERROR_SNIPPET_CHARS)}…` : oneLine;
 }
 
 /** Launches all agents in parallel and collects their results fault-tolerantly. */
