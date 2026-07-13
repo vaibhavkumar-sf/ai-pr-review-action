@@ -11,6 +11,10 @@ jest.mock('@actions/core', () => ({
   debug: jest.fn(),
 }));
 
+// ts-morph project construction is CPU-heavy; under full-suite parallelism
+// the first test can exceed Jest's 5s default.
+jest.setTimeout(60000);
+
 const FIXTURE_DIR = path.join(__dirname, '..', 'fixtures', 'mini-repo');
 
 function repoAt(dir: string): LocalRepo {

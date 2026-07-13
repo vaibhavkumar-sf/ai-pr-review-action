@@ -11,7 +11,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { minimatch } from 'minimatch';
 import { ActionConfig, ChangedFile, DependencyFile, DependencyReason } from '../../types';
-import { DEP_FILE_MAX_CHARS } from '../../config/limits';
+import { DEP_FILE_MAX_CHARS, RELATED_FILES_MAX, SKELETON_FULL_FILE_MAX_CHARS } from '../../config/limits';
 import { parseDiff } from '../../github/diff-parser';
 import { buildWorkspaceResolver, NULL_WORKSPACE_RESOLVER, WorkspaceResolver } from '../workspace-packages';
 import { FetchText } from '../ts-paths';
@@ -25,6 +25,9 @@ import {
 import { LocalRepo } from './local-repo';
 import { buildLocalFileIndex } from './file-index';
 import { buildTsEngine } from './ts-project';
+import { toSkeleton } from './skeletons';
+import { findCallers } from './callers';
+import { createGitRunner } from './git';
 
 export async function gatherRelatedFilesLocal(
   repo: LocalRepo,
@@ -117,8 +120,21 @@ export async function gatherRelatedFilesLocal(
     }
   }
 
+  // Callers of the changed exported symbols — reverse-dependency context no
+  // import graph provides. Skeletons with only the calling bodies kept.
+  let callers: Awaited<ReturnType<typeof findCallers>> = [];
+  if (config.relatedContext === 'full') {
+    try {
+      callers = await findCallers(repo.dir, engine, changedFiles, diff, isExcluded, createGitRunner([]));
+    } catch (err) {
+      core.debug(`Caller discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  callers = callers.filter((c) => !candidates.has(c.path));
+
   // Rank globally, then stable-boost candidates referenced from the changed
   // hunks themselves (stable sort preserves rank order within equal hits).
+  // Callers get reserved slots off the top of the shared file budget.
   const ranked = rankCandidates([...candidates.values()], index);
   ranked.sort((a, b) => (hunkHits.get(b.path) ?? 0) - (hunkHits.get(a.path) ?? 0));
 
@@ -126,6 +142,7 @@ export async function gatherRelatedFilesLocal(
     ranked,
     index,
     changedFiles.map((f) => f.filename),
+    RELATED_FILES_MAX - callers.length,
   );
 
   const truncate = (content: string) =>
@@ -137,11 +154,30 @@ export async function gatherRelatedFilesLocal(
   for (const candidate of selected) {
     const content = await readLocal(candidate.path);
     if (content === null) continue;
+    // Large supporting files go in as declaration skeletons: full API surface,
+    // no implementation bodies — complete context at a fraction of the tokens.
+    let finalContent = content;
+    let skeleton = false;
+    if (content.length > SKELETON_FULL_FILE_MAX_CHARS && /\.[cm]?tsx?$/.test(candidate.path)) {
+      finalContent = toSkeleton(content, candidate.path);
+      skeleton = finalContent !== content;
+    }
     results.push({
       filename: candidate.path,
-      content: truncate(content),
+      content: truncate(finalContent),
       referencedBy: Array.from(candidate.referencedBy),
       reason: candidate.reason,
+      ...(skeleton ? { skeleton } : {}),
+    });
+  }
+
+  for (const caller of callers) {
+    results.push({
+      filename: caller.path,
+      content: truncate(caller.content),
+      referencedBy: caller.referencedBy,
+      reason: 'caller',
+      skeleton: true,
     });
   }
 

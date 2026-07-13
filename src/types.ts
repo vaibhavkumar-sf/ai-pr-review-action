@@ -53,7 +53,8 @@ export type DependencyReason =
   | 'stylesheet'
   | 'di-binding'
   | 'barrel-reexport'
-  | 'declaring-module';
+  | 'declaring-module'
+  | 'caller';
 
 export interface DependencyFile {
   filename: string;
@@ -61,6 +62,8 @@ export interface DependencyFile {
   referencedBy: string[];
   /** Optional for back-compat; renderers default to 'imported'. */
   reason?: DependencyReason;
+  /** True when content is a declaration skeleton (bodies stripped). */
+  skeleton?: boolean;
 }
 
 export interface ChangedFile {

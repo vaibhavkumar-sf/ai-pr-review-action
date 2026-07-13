@@ -293,6 +293,7 @@ export function selectRelatedCandidates(
   ranked: RelatedCandidate[],
   tree: RepoTree,
   referencerOrderHint: string[],
+  maxFiles: number = RELATED_FILES_MAX,
 ): RelatedCandidate[] {
   const sizeOf = (path: string) => tree.size(path) ?? DEP_FILE_MAX_CHARS;
   const eligible = ranked.filter((c) => sizeOf(c.path) <= RELATED_FILE_MAX_BYTES);
@@ -315,10 +316,10 @@ export function selectRelatedCandidates(
   const cursors = new Map<string, number>();
   let totalChars = 0;
   let progress = true;
-  while (progress && selected.length < RELATED_FILES_MAX) {
+  while (progress && selected.length < maxFiles) {
     progress = false;
     for (const ref of referencerOrder) {
-      if (selected.length >= RELATED_FILES_MAX) break;
+      if (selected.length >= maxFiles) break;
       const queue = byReferencer.get(ref) ?? [];
       let idx = cursors.get(ref) ?? 0;
       while (idx < queue.length) {

@@ -322,6 +322,26 @@ export const LOCAL_CLONE_BLOB_LIMIT = '10m';
  *  legitimately needs more; past it, barrel expansion degrades gracefully. */
 export const TS_PROJECT_MAX_LOADED_FILES = 400;
 
+/** Related files at or under this size are sent whole — small files teach
+ *  more complete than stripped, and stripping them saves almost nothing. */
+export const SKELETON_FULL_FILE_MAX_CHARS = 3000;
+
+/** Function/method bodies shorter than this survive skeletonization:
+ *  stripping tiny bodies saves no tokens and costs fidelity. */
+export const SKELETON_BODY_MIN_CHARS = 120;
+
+/** Max changed exported symbols used to seed the caller search; hunks rarely
+ *  touch more exported API than this in one PR file. */
+export const CALLER_SEED_SYMBOLS_MAX = 12;
+
+/** Max files the `git grep` caller prescreen may return before we stop —
+ *  a symbol matched in more files than this is too generic to be useful. */
+export const CALLER_SCAN_MAX_FILES = 200;
+
+/** Max caller files added as review context. Callers are skeletons with only
+ *  the calling bodies kept, so each is cheap; more than this adds noise. */
+export const CALLERS_MAX_FILES = 6;
+
 // ─── Formatting ─────────────────────────────────────────────────────────────
 
 /** Description column cap in the Critical & High issues table, in chars. */
