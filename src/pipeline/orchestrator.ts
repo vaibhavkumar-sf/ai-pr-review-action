@@ -122,6 +122,7 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
     core.setOutput('review_status', 'skipped');
     core.setOutput('skip_reason', 'too_many_files');
     if (config.postDataUrl) await reportRunOutcome(config, 'skipped', 'too_many_files');
+    await context.contextTools?.dispose().catch(() => undefined);
     return;
   }
 
@@ -134,13 +135,23 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
     core.setOutput('review_status', 'skipped');
     core.setOutput('skip_reason', 'no_agents');
     if (config.postDataUrl) await reportRunOutcome(config, 'skipped', 'no_agents');
+    await context.contextTools?.dispose().catch(() => undefined);
     return;
   }
 
   // ── Phase 4: review agents (critical) ─────────────────────────────────────
-  const agentResults = await runPhase('Review agents', { critical: true }, () =>
-    runAgents(agents, context, commenter),
-  );
+  // Context tools (and the local checkout they hold) live exactly as long as
+  // the agents that can call them.
+  let agentResults;
+  try {
+    agentResults = await runPhase('Review agents', { critical: true }, () =>
+      runAgents(agents, context, commenter),
+    );
+  } finally {
+    if (context.contextTools) {
+      await context.contextTools.dispose().catch(() => undefined);
+    }
+  }
 
   // Report the model actually used (after any fallback resolution) rather than
   // the raw candidate chain, so PR comments and Backstage record the real model.

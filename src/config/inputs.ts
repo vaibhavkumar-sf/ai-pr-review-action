@@ -198,6 +198,7 @@ export function parseActionInputs(): ActionConfig {
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS, ...userExcludes],
     includePatterns: getCsv('include_patterns'),
     relatedContext: getEnum<RelatedContextMode>('related_context'),
+    enableContextTools: getBoolean('enable_context_tools'),
 
     // Diagrams
     enableDiagrams: getBoolean('enable_diagrams'),

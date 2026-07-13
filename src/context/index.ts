@@ -74,6 +74,7 @@ export async function gatherAllContext(config: ActionConfig): Promise<ReviewCont
     jiraContext,
     repoContext,
     framework,
+    contextTools: prContext.contextTools,
   };
 
   core.info(

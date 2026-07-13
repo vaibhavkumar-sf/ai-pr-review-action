@@ -1,4 +1,4 @@
-import { AIProvider, ChatMessage } from '../providers/ai-provider';
+import { AIProvider, ChatMessage, ChatResponse } from '../providers/ai-provider';
 import { ActionConfig, AgentResult, DependencyReason, Finding, ReviewCategory, ReviewContext } from '../types';
 import { completeTruncatedJson, extractJsonObject, salvageFindingObjects, sanitizeJsonText } from '../utils/json';
 import { addLineNumbers } from '../utils/text';
@@ -16,6 +16,9 @@ import {
   PROMPT_CLAMP_FLOOR_TOKENS,
   PROMPT_MAX_FILE_CHARS,
   PROMPT_TRIM_STAGES,
+  TOOL_LOOP_MAX_CALLS_PER_REVIEW,
+  TOOL_LOOP_MAX_ROUNDS,
+  TOOL_LOOP_MAX_ROUNDS_SEPARATE,
   TRUNCATION_RETRY_MAX_ESCALATIONS,
   TRUNCATION_RETRY_TOKENS_MULTIPLIER,
 } from '../config/limits';
@@ -141,7 +144,30 @@ export abstract class BaseAgent {
         temperature: this.config.temperature,
         timeout: this.config.agentTimeout * 1000,
       };
-      let response = await this.provider.chat(messages, chatOpts);
+      // Main review call: when context tools are available the model may pull
+      // missing context itself, on a hard bound (worst case TOOL_LOOP_MAX_ROUNDS
+      // extra AI turns; the final turn is always tool-less so a findings answer
+      // is guaranteed). All heal retries below run WITHOUT tools but on the
+      // tool transcript, so fetched context is kept without re-running tools.
+      const toolkit = context.contextTools;
+      let transcript = messages;
+      let response: ChatResponse;
+      if (toolkit && toolkit.callsRemaining() > 0) {
+        const maxRounds = this.config.reviewMode === 'separate'
+          ? TOOL_LOOP_MAX_ROUNDS_SEPARATE
+          : TOOL_LOOP_MAX_ROUNDS;
+        const result = await this.provider.chatWithTools(
+          messages,
+          chatOpts,
+          toolkit.definitions,
+          (call) => toolkit.execute(call),
+          { maxRounds, maxCalls: TOOL_LOOP_MAX_CALLS_PER_REVIEW },
+        );
+        response = result.response;
+        transcript = result.transcript;
+      } else {
+        response = await this.provider.chat(messages, chatOpts);
+      }
 
       // Auto-heal, branched by failure mode:
       if (isContextOverflow(response.stopReason)) {
@@ -179,7 +205,7 @@ export abstract class BaseAgent {
           + `retrying with thinking disabled and max_tokens=${escalatedTokens} `
           + `(escalation ${escalation + 1}/${TRUNCATION_RETRY_MAX_ESCALATIONS})`,
         );
-        response = await this.provider.chat(messages, {
+        response = await this.provider.chat(transcript, {
           ...chatOpts,
           maxTokens: escalatedTokens,
           thinkingBudget: 0,
@@ -195,7 +221,7 @@ export abstract class BaseAgent {
           + `text_len=${response.content.length}); auto-healing with a JSON-only retry`,
         );
         response = await this.provider.chat(
-          this.buildRepairMessages(messages, response.content),
+          this.buildRepairMessages(transcript, response.content),
           { ...chatOpts, maxTokens: escalatedTokens },
         );
       }
@@ -475,6 +501,11 @@ export abstract class BaseAgent {
 
     // Global rules applied to every agent, regardless of category or prompt file
     prompt += '\n\n' + loadPrompt('system/global-rules') + '\n';
+
+    // Tool guidance only when this run actually offers tools.
+    if (context.contextTools && context.contextTools.callsRemaining() > 0) {
+      prompt += '\n\n' + loadPrompt('system/context-tools') + '\n';
+    }
 
     // Add CLAUDE.md context if available
     if (context.repoContext.claudeMdContent) {

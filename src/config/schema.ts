@@ -248,6 +248,14 @@ export const INPUTS: readonly InputSpec[] = [
     description: 'Comma-separated glob patterns to include (if set, only these are reviewed)',
   },
   {
+    name: 'enable_context_tools',
+    type: 'boolean',
+    default: 'true',
+    group: 'Behavior Flags',
+    description:
+      'Let the reviewer model fetch missing context itself via bounded local-repo tools (read_file, grep, find_references, list_dir). Hard-capped: at most 2 extra AI turns per review and 12 tool calls per run; requires the local-clone context engine (falls back to no tools when unavailable)',
+  },
+  {
     name: 'related_context',
     type: 'enum',
     values: ['full', 'imports-only', 'off'],

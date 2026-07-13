@@ -44,6 +44,18 @@ export interface ReviewContext {
   jiraContext: JiraContext | null;
   repoContext: RepoContext;
   framework: Framework;
+  /**
+   * Bounded local-repo tools for agentic context retrieval (present when the
+   * local checkout was acquired and enable_context_tools is on). Structural
+   * typing keeps types.ts free of a context-module import; the orchestrator
+   * disposes it after the agents phase.
+   */
+  contextTools?: {
+    definitions: import('./providers/ai-provider').ToolDefinition[];
+    execute(call: import('./providers/ai-provider').ToolCall): Promise<string>;
+    callsRemaining(): number;
+    dispose(): Promise<void>;
+  };
 }
 
 /** Why an unchanged file was pulled in as review context. */
@@ -152,6 +164,7 @@ export interface ActionConfig {
   excludePatterns: string[];
   includePatterns: string[];
   relatedContext: RelatedContextMode;
+  enableContextTools: boolean;
 
   // Prompts
   systemPromptOverride: string;

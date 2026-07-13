@@ -345,6 +345,37 @@ export const CALLER_SCAN_MAX_FILES = 200;
  *  the calling bodies kept, so each is cheap; more than this adds noise. */
 export const CALLERS_MAX_FILES = 6;
 
+// ─── Context tool loop (bounded agentic retrieval) ──────────────────────────
+// This is a GitHub Action: tool use is a bounded escape hatch for context the
+// deterministic engine missed, NOT an open agent loop. Every extra round is
+// one more AI call against a throttling-prone endpoint, so the bounds are
+// deliberately tiny and the prompt tells the model to batch its lookups.
+
+/** Max tool ROUNDS per review call in combined mode (each round = 1 extra AI
+ *  call; the model is told to batch independent lookups into one round). */
+export const TOOL_LOOP_MAX_ROUNDS = 2;
+
+/** Max tool rounds per review call in separate mode: 7 agents share the run,
+ *  so each gets a single round to fill its one most important gap. */
+export const TOOL_LOOP_MAX_ROUNDS_SEPARATE = 1;
+
+/** Max individual tool calls per review call (across its rounds). */
+export const TOOL_LOOP_MAX_CALLS_PER_REVIEW = 6;
+
+/** Run-wide tool-call budget shared by ALL agents and batches — the hard
+ *  ceiling on how much agentic retrieval one review run can spend. */
+export const TOOL_CALLS_RUN_BUDGET = 12;
+
+/** Char cap per tool result (a read_file slice or grep listing; ~2k tokens). */
+export const TOOL_RESULT_MAX_CHARS = 8000;
+
+/** Max grep matches returned to the model — beyond this the pattern is too
+ *  generic to be review context. */
+export const TOOL_GREP_MAX_MATCHES = 50;
+
+/** Max entries returned by the list_dir tool. */
+export const TOOL_LIST_DIR_MAX_ENTRIES = 200;
+
 // ─── Formatting ─────────────────────────────────────────────────────────────
 
 /** Description column cap in the Critical & High issues table, in chars. */
