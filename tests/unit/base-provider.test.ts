@@ -1,6 +1,6 @@
 import { ChatMessage, ChatOptions, ChatResponse } from '../../src/providers/ai-provider';
-import { BaseProvider, extractAdvertisedOutputCap, StreamObservers } from '../../src/providers/base-provider';
-import { OUTPUT_TOKENS_CEILING } from '../../src/config/limits';
+import { BaseProvider, extractAdvertisedOutputCap, rateLimitBackoffMs, StreamObservers } from '../../src/providers/base-provider';
+import { OUTPUT_TOKENS_CEILING, RATE_LIMIT_RETRY_DELAY_MAX_MS, RATE_LIMIT_RETRY_DELAY_MS } from '../../src/config/limits';
 
 // Silence @actions/core logging; the provider logs heavily via core.info/warning.
 jest.mock('@actions/core', () => ({
@@ -211,6 +211,19 @@ describe('BaseProvider engine', () => {
     // The discovered cap is latched: the next call is clamped up front.
     await provider.chat(MESSAGES, { ...OPTS, maxTokens: 200000 });
     expect(seen[2]).toBe(64000);
+  });
+});
+
+describe('rateLimitBackoffMs', () => {
+  it('escalates from the base delay and caps at the maximum', () => {
+    expect(rateLimitBackoffMs(0)).toBe(RATE_LIMIT_RETRY_DELAY_MS);
+    expect(rateLimitBackoffMs(1)).toBe(15000);
+    expect(rateLimitBackoffMs(2)).toBe(22500);
+    // Monotonic non-decreasing, and eventually pinned at the cap.
+    for (let i = 1; i < 30; i++) {
+      expect(rateLimitBackoffMs(i)).toBeGreaterThanOrEqual(rateLimitBackoffMs(i - 1));
+    }
+    expect(rateLimitBackoffMs(29)).toBe(RATE_LIMIT_RETRY_DELAY_MAX_MS);
   });
 });
 

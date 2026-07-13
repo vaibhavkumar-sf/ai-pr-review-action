@@ -96,8 +96,25 @@ export const RETRYABLE_HTTP_STATUS = [429, 500, 502, 503, 529];
  */
 export const RATE_LIMIT_MAX_ATTEMPTS = 400;
 
-/** Fixed wait between 429 retries (unless Retry-After asks for more). */
+/**
+ * First wait between 429 retries. Later waits ESCALATE (see
+ * RATE_LIMIT_DELAY_GROWTH): fair-usage limiters punish request FREQUENCY, so
+ * retrying on a fixed short cadence can keep re-tripping the very limit being
+ * waited out. A server-sent Retry-After always takes precedence.
+ */
 export const RATE_LIMIT_RETRY_DELAY_MS = 10000;
+
+/** Growth factor per consecutive 429 retry (10s → 15s → 22s → …). */
+export const RATE_LIMIT_DELAY_GROWTH = 1.5;
+
+/** Ceiling for one escalated 429 wait — polling every 2 min is patient AND polite. */
+export const RATE_LIMIT_RETRY_DELAY_MAX_MS = 120000;
+
+/**
+ * Total 429 waiting budget per call. A flag that persists this long is an
+ * account-level block that needs provider action, not more retries.
+ */
+export const RATE_LIMIT_MAX_TOTAL_WAIT_MS = 3600000;
 
 /** Transient-error backoff base: 2s, 4s, 8s, … (exponential per attempt). */
 export const TRANSIENT_BACKOFF_BASE_MS = 1000;
