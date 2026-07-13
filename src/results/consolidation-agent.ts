@@ -1,6 +1,6 @@
 import { AIProvider } from '../providers/ai-provider';
 import { Finding } from '../types';
-import { extractJsonObject } from '../utils/json';
+import { completeTruncatedJson, extractJsonObject, sanitizeJsonText } from '../utils/json';
 import { loadPrompt } from '../prompts/loader';
 import { coerceCategory, coerceFinding } from '../config/taxonomy';
 import {
@@ -92,12 +92,18 @@ function buildUserPrompt(findings: Finding[]): string {
 
 function parseResponse(content: string, originalFindings: Finding[]): Finding[] {
   try {
-    const jsonStr = extractJsonObject(content);
+    const jsonStr = extractJsonObject(content) ?? completeTruncatedJson(content);
     if (!jsonStr) {
       throw new Error('No JSON object found in consolidation response');
     }
 
-    const parsed = JSON.parse(jsonStr);
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      // Same healing as agent parsing: control chars / bad escapes / commas.
+      parsed = JSON.parse(sanitizeJsonText(jsonStr));
+    }
     const consolidated = parsed.consolidated;
 
     if (!Array.isArray(consolidated) || consolidated.length === 0) {

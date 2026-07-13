@@ -169,3 +169,38 @@ describe('BaseAgent auto-batching for huge PRs', () => {
     expect(provider.calls).toHaveLength(1);
   });
 });
+
+describe('BaseAgent malformed-JSON auto-healing', () => {
+  const asResponse = (content: string): ChatResponse =>
+    ({ content, inputTokens: 10, outputTokens: 50, stopReason: 'end_turn' });
+
+  it('heals control characters in string values without an AI retry', async () => {
+    // A raw newline inside a string value — JSON.parse alone rejects this.
+    const broken = '{"findings": [{"severity": "high", "category": "security", "file": "src/a.ts", '
+      + '"line": 3, "title": "t", "description": "line1\nline2"}], "summary": "ok", "score": 7}';
+    const provider = new ScriptedProvider([asResponse(broken)]);
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext());
+
+    expect(result.error).toBeUndefined();
+    expect(provider.calls).toHaveLength(1); // healed locally, no repair call
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].description).toBe('line1\nline2');
+  });
+
+  it('salvages intact findings individually when even the repair retry is malformed', async () => {
+    const mangled = '{"findings": [{"severity": "high", "category": "security", "file": "src/a.ts", '
+      + '"line": 3, "title": "kept finding", "description": "d"}, {"severity": "low", "brok';
+    // completeTruncatedJson heals this one locally, so make BOTH calls return
+    // something only per-finding salvage can handle: valid prefix + prose tail.
+    const unhealable = mangled + '\nSome trailing prose the model added…';
+    const provider = new ScriptedProvider([asResponse(unhealable), asResponse(unhealable)]);
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext());
+
+    expect(result.error).toBeUndefined();
+    expect(result.findings.some((f) => f.title === 'kept finding')).toBe(true);
+  });
+});

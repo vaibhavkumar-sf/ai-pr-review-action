@@ -191,7 +191,7 @@ inputs:
     required: false
     default: '800'
   max_retries:
-    description: 'Maximum retries per agent on transient AI API failure (5xx/network). Rate limits (429) retry on their own patient budget — up to 400 attempts with escalating waits (10s up to 2min, max 1h total) — independent of this setting'
+    description: 'Maximum retries per agent on transient AI API failure (5xx/network). Rate limits (429) retry on their own patient budget — up to 400 attempts with escalating waits (10s up to 2min, max 5h total, riding out fair-usage throttling spells) — independent of this setting'
     required: false
     default: '3'
   cancel_on_pr_close:
