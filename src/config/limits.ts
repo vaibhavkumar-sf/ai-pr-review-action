@@ -122,10 +122,13 @@ export const RATE_LIMIT_DELAY_GROWTH = 1.5;
 export const RATE_LIMIT_RETRY_DELAY_MAX_MS = 120000;
 
 /**
- * Total 429 waiting budget per call. A flag that persists this long is an
- * account-level block that needs provider action, not more retries.
+ * Total 429 waiting budget per call. Observed in production: z.ai fair-usage
+ * (code 1313) spells can outlast a full hour, and failing the run then wastes
+ * the wait already invested — so this sits just under GitHub's 6h job hard
+ * limit, leaving room to fail with a clean report (comment, outputs,
+ * Backstage) instead of being killed mid-flight by the runner.
  */
-export const RATE_LIMIT_MAX_TOTAL_WAIT_MS = 3600000;
+export const RATE_LIMIT_MAX_TOTAL_WAIT_MS = 5 * 60 * 60 * 1000;
 
 /** Transient-error backoff base: 2s, 4s, 8s, … (exponential per attempt). */
 export const TRANSIENT_BACKOFF_BASE_MS = 1000;

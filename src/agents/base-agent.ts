@@ -1,6 +1,6 @@
 import { AIProvider, ChatMessage } from '../providers/ai-provider';
 import { ActionConfig, AgentResult, DependencyReason, Finding, ReviewCategory, ReviewContext } from '../types';
-import { extractJsonObject } from '../utils/json';
+import { completeTruncatedJson, extractJsonObject, salvageFindingObjects, sanitizeJsonText } from '../utils/json';
 import { addLineNumbers } from '../utils/text';
 import { loadPrompt, loadPromptOrEmpty } from '../prompts/loader';
 import { coerceFinding } from '../config/taxonomy';
@@ -58,6 +58,15 @@ function splitDiffByFile(diff: string): Map<string, string> {
     if (header) byFile.set(header[2].trim(), part.trimEnd());
   }
   return byFile;
+}
+
+/** Unescapes a regex-captured JSON string fragment (salvage path only). */
+function safeUnescape(text: string): string {
+  try {
+    return JSON.parse(`"${text}"`);
+  } catch {
+    return text;
+  }
 }
 
 /** Human phrasing for why a related file is in the prompt (presentation only). */
@@ -594,28 +603,55 @@ export abstract class BaseAgent {
   protected tryParseResponse(
     content: string,
   ): { findings: Finding[]; summary: string; score: number } | null {
+    // Healing cascade: exact extract → sanitized (control chars, invalid
+    // escapes, trailing commas) → truncation-completed → per-finding salvage.
+    // Every step is cheaper than the AI retry it replaces.
+    const candidates: string[] = [];
     const jsonStr = extractJsonObject(content);
-    if (!jsonStr) return null;
-
-    let parsed: { findings?: Record<string, unknown>[]; summary?: unknown; score?: unknown };
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch (error) {
-      core.debug(
-        `Agent ${this.name}: JSON.parse failed on extracted object: `
-        + `${error instanceof Error ? error.message : String(error)}`,
-      );
-      return null;
+    if (jsonStr) {
+      candidates.push(jsonStr, sanitizeJsonText(jsonStr));
+    } else {
+      const completed = completeTruncatedJson(content);
+      if (completed) candidates.push(completed, sanitizeJsonText(completed));
     }
 
-    const findings = (parsed.findings || []).map(
-      (f: Record<string, unknown>) => coerceFinding(f, raw => this.resolveCategory(raw)),
-    );
+    for (const candidate of candidates) {
+      let parsed: { findings?: Record<string, unknown>[]; summary?: unknown; score?: unknown };
+      try {
+        parsed = JSON.parse(candidate);
+      } catch (error) {
+        core.debug(
+          `Agent ${this.name}: JSON.parse failed on a candidate: `
+          + `${error instanceof Error ? error.message : String(error)}`,
+        );
+        continue;
+      }
+      const findings = (parsed.findings || []).map(
+        (f: Record<string, unknown>) => coerceFinding(f, raw => this.resolveCategory(raw)),
+      );
+      return {
+        findings,
+        summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+        score: typeof parsed.score === 'number' ? parsed.score : 5,
+      };
+    }
 
-    return {
-      findings,
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      score: typeof parsed.score === 'number' ? parsed.score : 5,
-    };
+    // Last resort: recover intact finding objects individually so one broken
+    // finding costs itself, not the whole review.
+    const salvaged = salvageFindingObjects(content);
+    if (salvaged) {
+      core.warning(
+        `Agent ${this.name}: response JSON was malformed — salvaged ${salvaged.length} finding(s) individually`,
+      );
+      const summaryMatch = content.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      const scoreMatch = content.match(/"score"\s*:\s*(\d+(?:\.\d+)?)/);
+      return {
+        findings: salvaged.map((f) => coerceFinding(f, raw => this.resolveCategory(raw))),
+        summary: summaryMatch ? safeUnescape(summaryMatch[1]) : '',
+        score: scoreMatch ? Number(scoreMatch[1]) : 5,
+      };
+    }
+
+    return null;
   }
 }

@@ -325,7 +325,7 @@ export const INPUTS: readonly InputSpec[] = [
     type: 'number',
     default: '3',
     group: 'Advanced',
-    description: 'Maximum retries per agent on transient AI API failure (5xx/network). Rate limits (429) retry on their own patient budget — up to 400 attempts with escalating waits (10s up to 2min, max 1h total) — independent of this setting',
+    description: 'Maximum retries per agent on transient AI API failure (5xx/network). Rate limits (429) retry on their own patient budget — up to 400 attempts with escalating waits (10s up to 2min, max 5h total, riding out fair-usage throttling spells) — independent of this setting',
   },
   {
     name: 'cancel_on_pr_close',
