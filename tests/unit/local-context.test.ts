@@ -129,6 +129,27 @@ describe('gatherRelatedFilesLocal (compiler engine over mini-repo)', () => {
     expect(deps.some((d) => d.filename === 'src/app/user.model.ts')).toBe(false);
   });
 
+  it('only follows the re-exports the diff touched when a barrel itself changed', async () => {
+    // PR adds ONE export line to the barrel (line 2 of the fixture file);
+    // the untouched `export *` on line 1 must not drag its target in.
+    const barrel = 'src/app/board/models/index.ts';
+    const diff = diffFor(barrel, ["export { BoardMeta } from './board-meta.model';"]);
+    const deps = await gatherRelatedFilesLocal(repoAt(FIXTURE_DIR), makeConfig(), [changed(barrel)], diff);
+
+    const names = deps.map((d) => d.filename);
+    expect(names).toContain('src/app/board/models/board-meta.model.ts');
+    expect(names).not.toContain('src/app/board/models/board-csv-dto.model.ts');
+  });
+
+  it('follows all of a changed barrel\'s re-exports when no diff info is available', async () => {
+    const barrel = 'src/app/board/models/index.ts';
+    const deps = await gatherRelatedFilesLocal(repoAt(FIXTURE_DIR), makeConfig(), [changed(barrel)], '');
+
+    const names = deps.map((d) => d.filename);
+    expect(names).toContain('src/app/board/models/board-meta.model.ts');
+    expect(names).toContain('src/app/board/models/board-csv-dto.model.ts');
+  });
+
   it('skips unresolvable external packages instead of guessing', async () => {
     const files = [changed('src/app/angular/widget.component.ts')];
     const deps = await gatherRelatedFilesLocal(

@@ -43,8 +43,18 @@ export interface ImportResolution {
 }
 
 export interface TsEngine {
-  /** Exact resolution of a changed file's imports/re-exports. */
-  resolveImports(changedFile: string): ImportResolution;
+  /**
+   * Exact resolution of a changed file's imports/re-exports.
+   *
+   * `changedRanges` (1-based new-side line ranges of the file's added diff
+   * lines) gates RE-EXPORTS only: a re-export is followed solely when its
+   * declaration intersects a changed range. A changed barrel forwards every
+   * sibling module, but the PR only touches the export lines it added — the
+   * untouched siblings are not context. Imports are always followed (the
+   * file's code genuinely uses them), and omitting `changedRanges` follows
+   * everything (fail open when diff info is unavailable).
+   */
+  resolveImports(changedFile: string, changedRanges?: LineRange[]): ImportResolution;
   /** Exported symbols of a file whose declarations intersect the given
    *  1-based line ranges (the diff hunks) — the seeds for caller search. */
   seedSymbols(changedFile: string, ranges: LineRange[]): string[];
@@ -130,7 +140,7 @@ export function buildTsEngine(repoDir: string): TsEngine {
     return names;
   };
 
-  const resolveImports = (changedFile: string): ImportResolution => {
+  const resolveImports = (changedFile: string, changedRanges?: LineRange[]): ImportResolution => {
     const resolved: ResolvedImport[] = [];
     const unresolved: UnresolvedImport[] = [];
     if (disposed || !/\.[cm]?[tj]sx?$/.test(changedFile)) return { resolved, unresolved };
@@ -146,6 +156,11 @@ export function buildTsEngine(repoDir: string): TsEngine {
     const declarations = [...sourceFile.getImportDeclarations(), ...sourceFile.getExportDeclarations()];
     for (const decl of declarations) {
       try {
+        if (decl instanceof ExportDeclaration && changedRanges) {
+          const start = decl.getStartLineNumber();
+          const end = decl.getEndLineNumber();
+          if (!changedRanges.some((r) => r.start <= end && r.end >= start)) continue;
+        }
         const specifier = decl.getModuleSpecifierValue();
         if (!specifier) continue; // `export { x }` without a source
         const symbols = symbolsOf(decl);
