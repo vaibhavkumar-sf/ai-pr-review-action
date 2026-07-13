@@ -8,15 +8,90 @@
  * definitions behind barrel (index.ts) re-exports.
  */
 
-import { ChangedFile, DependencyReason, Framework } from '../types';
+import { ActionConfig, ChangedFile, DependencyReason, Framework } from '../types';
 import { extractImports, resolveRelativeImport } from '../utils/imports';
-import { BARREL_MAX_TARGETS, RELATED_KIND_WEIGHT } from '../config/limits';
+import {
+  BARREL_MAX_TARGETS,
+  DEP_FILE_MAX_CHARS,
+  RELATED_FILES_MAX,
+  RELATED_FILE_MAX_BYTES,
+  RELATED_KIND_WEIGHT,
+  RELATED_TOTAL_MAX_CHARS,
+} from '../config/limits';
 import { RepoTree, resolveWithExtensions } from './repo-tree';
 
 export interface RelatedCandidate {
   path: string;
   referencedBy: Set<string>;
   reason: DependencyReason;
+}
+
+/**
+ * Detect frameworks from changed file patterns. This is the fastest check
+ * and works even in monorepos where the root package.json doesn't list
+ * framework dependencies. Used by related-context gathering, which runs
+ * before the authoritative repo-context detection.
+ */
+export function detectFromFilePatterns(
+  changedFiles: ChangedFile[],
+): { angular: boolean; loopback4: boolean } {
+  let angular = false;
+  let loopback4 = false;
+
+  for (const file of changedFiles) {
+    const name = file.filename;
+
+    // Angular patterns
+    if (
+      name.endsWith('.component.ts') ||
+      name.endsWith('.module.ts') ||
+      name.endsWith('.directive.ts') ||
+      name.endsWith('.pipe.ts') ||
+      name.endsWith('.component.html') ||
+      name.endsWith('.component.scss') ||
+      name.includes('/angular.json')
+    ) {
+      angular = true;
+    }
+
+    // LoopBack4 patterns
+    if (
+      name.endsWith('.controller.ts') ||
+      name.endsWith('.repository.ts') ||
+      name.endsWith('.model.ts') ||
+      name.endsWith('.datasource.ts') ||
+      name.endsWith('.interceptor.ts') ||
+      name.endsWith('.sequence.ts') ||
+      name.includes('/application.ts')
+    ) {
+      loopback4 = true;
+    }
+
+    // Also check file content for imports (if content available)
+    if (file.content) {
+      if (file.content.includes('@angular/core') || file.content.includes('@angular/common')) {
+        angular = true;
+      }
+      if (file.content.includes('@loopback/core') || file.content.includes('@loopback/rest')) {
+        loopback4 = true;
+      }
+    }
+
+    if (angular && loopback4) break;
+  }
+
+  return { angular, loopback4 };
+}
+
+/** Framework used for related-context expansion. Config override wins; auto
+ *  falls back to changed-file patterns (authoritative detection runs later). */
+export function frameworkForExpansion(config: ActionConfig, changedFiles: ChangedFile[]): Framework {
+  if (config.framework !== 'auto') return config.framework;
+  const detected = detectFromFilePatterns(changedFiles);
+  if (detected.angular && detected.loopback4) return 'both';
+  if (detected.angular) return 'angular';
+  if (detected.loopback4) return 'loopback4';
+  return 'generic';
 }
 
 /**
@@ -198,6 +273,72 @@ function kindOf(path: string): string {
   if (/\.html$/.test(path)) return 'template';
   if (/\.(scss|css|less)$/.test(path)) return 'stylesheet';
   return 'other';
+}
+
+/**
+ * Selects which ranked candidates make the prompt, shared by the local-clone
+ * and GitHub-API engines.
+ *
+ * FAIR selection: round-robin across the referencing changed files so one
+ * high-fan-out file (a controller importing 20+ services) cannot crowd out
+ * another changed file's only — and therefore most review-critical —
+ * dependencies. Within each file's queue, SPECIFIC dependencies come first
+ * (fewest other referencers): shared files will be placed by some file's
+ * later round anyway, while a file's unique dependency is exactly what its
+ * review needs. Selection stops at RELATED_FILES_MAX files or
+ * RELATED_TOTAL_MAX_CHARS estimated chars; the result is re-sorted to the
+ * input rank order (the prompt and trim-stage slicing see global rank).
+ */
+export function selectRelatedCandidates(
+  ranked: RelatedCandidate[],
+  tree: RepoTree,
+  referencerOrderHint: string[],
+): RelatedCandidate[] {
+  const sizeOf = (path: string) => tree.size(path) ?? DEP_FILE_MAX_CHARS;
+  const eligible = ranked.filter((c) => sizeOf(c.path) <= RELATED_FILE_MAX_BYTES);
+
+  const byReferencer = new Map<string, RelatedCandidate[]>();
+  for (const candidate of eligible) {
+    for (const ref of candidate.referencedBy) {
+      const queue = byReferencer.get(ref);
+      if (queue) queue.push(candidate);
+      else byReferencer.set(ref, [candidate]);
+    }
+  }
+  for (const queue of byReferencer.values()) {
+    queue.sort((a, b) => a.referencedBy.size - b.referencedBy.size);
+  }
+  const referencerOrder = referencerOrderHint.filter((f) => byReferencer.has(f));
+
+  const selectedPaths = new Set<string>();
+  const selected: RelatedCandidate[] = [];
+  const cursors = new Map<string, number>();
+  let totalChars = 0;
+  let progress = true;
+  while (progress && selected.length < RELATED_FILES_MAX) {
+    progress = false;
+    for (const ref of referencerOrder) {
+      if (selected.length >= RELATED_FILES_MAX) break;
+      const queue = byReferencer.get(ref) ?? [];
+      let idx = cursors.get(ref) ?? 0;
+      while (idx < queue.length) {
+        const candidate = queue[idx++];
+        if (selectedPaths.has(candidate.path)) continue;
+        const estimate = Math.min(sizeOf(candidate.path), DEP_FILE_MAX_CHARS);
+        if (totalChars + estimate > RELATED_TOTAL_MAX_CHARS) continue;
+        selectedPaths.add(candidate.path);
+        selected.push(candidate);
+        totalChars += estimate;
+        progress = true;
+        break;
+      }
+      cursors.set(ref, idx);
+    }
+  }
+
+  const rankIndex = new Map(eligible.map((c, i) => [c.path, i]));
+  selected.sort((a, b) => (rankIndex.get(a.path) ?? 0) - (rankIndex.get(b.path) ?? 0));
+  return selected;
 }
 
 /**

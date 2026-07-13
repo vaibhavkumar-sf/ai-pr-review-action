@@ -2,6 +2,9 @@ import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import { ActionConfig, ChangedFile, Framework, RepoContext } from '../types';
 import { MONOREPO_SCAN_LIMIT } from '../config/limits';
+import { detectFromFilePatterns } from './related-files';
+
+export { detectFromFilePatterns, frameworkForExpansion } from './related-files';
 
 export async function gatherRepoContext(
   config: ActionConfig,
@@ -74,63 +77,6 @@ export async function gatherRepoContext(
   );
 
   return repoContext;
-}
-
-/**
- * Detect frameworks from changed file patterns. This is the fastest check
- * and works even in monorepos where the root package.json doesn't list
- * framework dependencies. Exported for related-context gathering, which runs
- * before the authoritative repo-context detection.
- */
-export function detectFromFilePatterns(
-  changedFiles: ChangedFile[],
-): { angular: boolean; loopback4: boolean } {
-  let angular = false;
-  let loopback4 = false;
-
-  for (const file of changedFiles) {
-    const name = file.filename;
-
-    // Angular patterns
-    if (
-      name.endsWith('.component.ts') ||
-      name.endsWith('.module.ts') ||
-      name.endsWith('.directive.ts') ||
-      name.endsWith('.pipe.ts') ||
-      name.endsWith('.component.html') ||
-      name.endsWith('.component.scss') ||
-      name.includes('/angular.json')
-    ) {
-      angular = true;
-    }
-
-    // LoopBack4 patterns
-    if (
-      name.endsWith('.controller.ts') ||
-      name.endsWith('.repository.ts') ||
-      name.endsWith('.model.ts') ||
-      name.endsWith('.datasource.ts') ||
-      name.endsWith('.interceptor.ts') ||
-      name.endsWith('.sequence.ts') ||
-      name.includes('/application.ts')
-    ) {
-      loopback4 = true;
-    }
-
-    // Also check file content for imports (if content available)
-    if (file.content) {
-      if (file.content.includes('@angular/core') || file.content.includes('@angular/common')) {
-        angular = true;
-      }
-      if (file.content.includes('@loopback/core') || file.content.includes('@loopback/rest')) {
-        loopback4 = true;
-      }
-    }
-
-    if (angular && loopback4) break;
-  }
-
-  return { angular, loopback4 };
 }
 
 /**

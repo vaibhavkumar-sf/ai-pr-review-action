@@ -1,10 +1,18 @@
 import { gatherPRContext } from '../../src/context/pr-context';
+import { acquireLocalRepo } from '../../src/context/local/local-repo';
 import { makeConfig } from '../fixtures/factory';
 
 jest.mock('@actions/core', () => ({
   info: jest.fn(),
   warning: jest.fn(),
   debug: jest.fn(),
+}));
+
+// These tests exercise the GitHub-API engine: local acquisition reports
+// "unavailable" so gatherPRContext takes the fallback path (the local engine
+// has its own suite over tests/fixtures/mini-repo).
+jest.mock('../../src/context/local/local-repo', () => ({
+  acquireLocalRepo: jest.fn().mockResolvedValue(null),
 }));
 
 /**
@@ -143,10 +151,12 @@ describe('gatherPRContext related-context', () => {
       files: { 'src/a.ts': `import { B } from './b';`, 'src/b.ts': 'export const B = 1;' },
     });
 
+    (acquireLocalRepo as jest.Mock).mockClear();
     const context = await gatherPRContext(makeConfig({ relatedContext: 'off' }));
     expect(context.dependencyFiles).toEqual([]);
     expect(state.getTreeCalls).toBe(0);
     expect(state.getContentCalls).toEqual(['src/a.ts']); // only the changed file body
+    expect(acquireLocalRepo).not.toHaveBeenCalled(); // off = no clone attempt either
   });
 
   it('falls back to legacy relative-only probing when the tree is truncated', async () => {

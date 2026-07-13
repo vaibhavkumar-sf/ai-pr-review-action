@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import { minimatch } from 'minimatch';
-import { ActionConfig, ChangedFile, DependencyFile, DependencyReason, Framework } from '../types';
+import { ActionConfig, ChangedFile, DependencyFile, DependencyReason } from '../types';
 import { extractImports, extractRelativeImports, resolveRelativeImport } from '../utils/imports';
 import {
   BARREL_MAX_TARGETS,
@@ -9,20 +9,20 @@ import {
   DEP_FILE_MAX_CHARS,
   GITHUB_PER_PAGE,
   MAX_DEP_FILES,
-  RELATED_FILES_MAX,
-  RELATED_FILE_MAX_BYTES,
-  RELATED_TOTAL_MAX_CHARS,
 } from '../config/limits';
 import { fetchRepoTree, resolveWithExtensions } from './repo-tree';
 import { buildAliasResolver, FetchText, NULL_ALIAS_RESOLVER, AliasResolver } from './ts-paths';
 import { buildWorkspaceResolver, NULL_WORKSPACE_RESOLVER, WorkspaceResolver } from './workspace-packages';
 import {
   collectFrameworkCandidates,
+  frameworkForExpansion,
   rankCandidates,
   resolveBarrelTargets,
+  selectRelatedCandidates,
   RelatedCandidate,
 } from './related-files';
-import { detectFromFilePatterns } from './repo-context';
+import { acquireLocalRepo } from './local/local-repo';
+import { gatherRelatedFilesLocal } from './local/local-context';
 
 export async function gatherPRContext(config: ActionConfig): Promise<{
   prTitle: string;
@@ -166,13 +166,32 @@ export async function gatherPRContext(config: ActionConfig): Promise<{
   core.info(`Successfully gathered context for ${changedFiles.length} changed file(s)`);
 
   // 7. Fetch related files (imports, framework siblings, DI bindings —
-  //    referenced by changed files but not changed themselves)
+  //    referenced by changed files but not changed themselves). Primary
+  //    engine: local checkout + TypeScript compiler (exact). Fallback: the
+  //    GitHub-API static graph. `off` does zero extra work either way.
   let dependencyFiles: DependencyFile[] = [];
-  try {
-    dependencyFiles = await gatherRelatedFiles(octokit, config, headSha, changedFiles);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    core.warning(`Related-context gathering failed: ${message}. Continuing with diff-only context`);
+  if (config.relatedContext !== 'off') {
+    const repo = await acquireLocalRepo(config, headSha);
+    try {
+      dependencyFiles = repo
+        ? await gatherRelatedFilesLocal(repo, config, changedFiles, diff)
+        : await gatherRelatedFiles(octokit, config, headSha, changedFiles);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (repo) {
+        core.warning(`Local related-context engine failed: ${message}. Retrying via the GitHub API engine`);
+        try {
+          dependencyFiles = await gatherRelatedFiles(octokit, config, headSha, changedFiles);
+        } catch (apiErr) {
+          const apiMessage = apiErr instanceof Error ? apiErr.message : String(apiErr);
+          core.warning(`Related-context gathering failed: ${apiMessage}. Continuing with diff-only context`);
+        }
+      } else {
+        core.warning(`Related-context gathering failed: ${message}. Continuing with diff-only context`);
+      }
+    } finally {
+      await repo?.cleanup();
+    }
   }
 
   return {
@@ -316,61 +335,13 @@ async function gatherRelatedFiles(
     }
   }
 
-  // ── Rank and budget ──
-  const sizeOf = (path: string) => tree.size(path) ?? DEP_FILE_MAX_CHARS;
-  const eligible = [...candidates.values()].filter((c) => sizeOf(c.path) <= RELATED_FILE_MAX_BYTES);
-  const ranked = rankCandidates(eligible, tree);
-
-  // FAIR selection: round-robin across the referencing changed files so one
-  // high-fan-out file (a controller importing 20+ services) cannot crowd out
-  // another changed file's only — and therefore most review-critical —
-  // dependencies. Each round, every changed file places its next-best
-  // unselected candidate until the count/char budgets are exhausted.
-  const byReferencer = new Map<string, RelatedCandidate[]>();
-  for (const candidate of ranked) {
-    for (const ref of candidate.referencedBy) {
-      const queue = byReferencer.get(ref);
-      if (queue) queue.push(candidate);
-      else byReferencer.set(ref, [candidate]);
-    }
-  }
-  // Within each file's queue, SPECIFIC dependencies come first (fewest other
-  // referencers, then kind weight via global rank): shared files (a package
-  // barrel everyone imports) will be placed by some file's later round anyway,
-  // while a file's unique dependency is exactly what its review needs.
-  for (const queue of byReferencer.values()) {
-    queue.sort((a, b) => a.referencedBy.size - b.referencedBy.size);
-  }
-  const referencerOrder = changedFiles.map((f) => f.filename).filter((f) => byReferencer.has(f));
-
-  const selectedPaths = new Set<string>();
-  const selected: RelatedCandidate[] = [];
-  const cursors = new Map<string, number>();
-  let totalChars = 0;
-  let progress = true;
-  while (progress && selected.length < RELATED_FILES_MAX) {
-    progress = false;
-    for (const ref of referencerOrder) {
-      if (selected.length >= RELATED_FILES_MAX) break;
-      const queue = byReferencer.get(ref) ?? [];
-      let idx = cursors.get(ref) ?? 0;
-      while (idx < queue.length) {
-        const candidate = queue[idx++];
-        if (selectedPaths.has(candidate.path)) continue;
-        const estimate = Math.min(sizeOf(candidate.path), DEP_FILE_MAX_CHARS);
-        if (totalChars + estimate > RELATED_TOTAL_MAX_CHARS) continue;
-        selectedPaths.add(candidate.path);
-        selected.push(candidate);
-        totalChars += estimate;
-        progress = true;
-        break;
-      }
-      cursors.set(ref, idx);
-    }
-  }
-  // Prompt (and trim-stage slicing) still sees global rank order.
-  const rankIndex = new Map(ranked.map((c, i) => [c.path, i]));
-  selected.sort((a, b) => (rankIndex.get(a.path) ?? 0) - (rankIndex.get(b.path) ?? 0));
+  // ── Rank and budget (fair selection shared with the local engine) ──
+  const ranked = rankCandidates([...candidates.values()], tree);
+  const selected = selectRelatedCandidates(
+    ranked,
+    tree,
+    changedFiles.map((f) => f.filename),
+  );
 
   // ── Fetch contents (rank order preserved) ──
   const truncate = (content: string) =>
@@ -406,17 +377,6 @@ async function gatherRelatedFiles(
   }
 
   return results;
-}
-
-/** Framework used for related-context expansion. Config override wins; auto
- *  falls back to changed-file patterns (authoritative detection runs later). */
-function frameworkForExpansion(config: ActionConfig, changedFiles: ChangedFile[]): Framework {
-  if (config.framework !== 'auto') return config.framework;
-  const detected = detectFromFilePatterns(changedFiles);
-  if (detected.angular && detected.loopback4) return 'both';
-  if (detected.angular) return 'angular';
-  if (detected.loopback4) return 'loopback4';
-  return 'generic';
 }
 
 /**
