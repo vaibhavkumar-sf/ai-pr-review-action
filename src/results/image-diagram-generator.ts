@@ -16,10 +16,13 @@ import * as core from '@actions/core';
  * Generates Mermaid diagrams (flowchart + sequence) via AI and returns
  * them as native ```mermaid code blocks for GitHub's server-side rendering.
  *
- * Validates diagrams locally using the same mermaid.js parser that GitHub uses,
- * with Kroki.io as a fallback validator. Diagrams are cosmetic: the simple,
- * reliable prompt with a single retry is used (rich %%{init}%% theming is
- * exactly what GitHub's parser rejects), and any failure is non-fatal.
+ * Dual fidelity, ONE AI call: the model returns a STYLED variant (theme
+ * directive, classDef colors, emojis) and a SIMPLE plain variant of each
+ * diagram together. Each variant is validated with the same mermaid.js parser
+ * GitHub uses (Kroki as fallback); the styled one is posted when it parses,
+ * the simple twin is the fallback, and only when BOTH variants of a diagram
+ * are broken is the single fix retry spent. Diagrams are cosmetic: any
+ * failure is non-fatal.
  */
 export async function generateDiagramImages(
   context: ReviewContext,
@@ -61,6 +64,25 @@ interface MermaidDiagrams {
   sequence: string | null;
 }
 
+/** Styled + simple twins of one diagram, as returned by the model. */
+interface DiagramVariants {
+  styled: string | null;
+  simple: string | null;
+}
+
+interface DiagramVariantsResponse {
+  flowchart: DiagramVariants;
+  sequence: DiagramVariants;
+}
+
+/** Outcome of picking the best valid variant of one diagram. */
+interface PickedDiagram {
+  code: string | null;
+  // Per-variant validation errors, present only when NO variant validated —
+  // exactly what the fix prompt needs.
+  errors: Array<{ variant: 'styled' | 'simple'; error: string; code: string }>;
+}
+
 async function generateMermaidDiagrams(
   context: ReviewContext,
   provider: AIProvider,
@@ -72,7 +94,7 @@ async function generateMermaidDiagrams(
   userPrompt += `**Files changed:** ${context.changedFiles.map(f => `${f.filename} (${f.status})`).join(', ')}\n\n`;
   userPrompt += `**Diff:**\n\`\`\`diff\n${context.diff.substring(0, DIAGRAM_DIFF_CHARS)}\n\`\`\`\n`;
 
-  core.info('Generating Mermaid diagrams...');
+  core.info('Generating Mermaid diagrams (styled + simple fallback)...');
   return tryGenerateDiagrams(loadPrompt('system/mermaid-diagrams'), userPrompt, provider, DIAGRAM_MAX_RETRIES);
 }
 
@@ -101,39 +123,29 @@ async function tryGenerateDiagrams(
       },
     );
 
-    const diagrams = parseDiagramResponse(response.content);
+    const variants = parseDiagramResponse(response.content);
+    const flowchart = await pickBestVariant('flowchart', variants.flowchart);
+    const sequence = await pickBestVariant('sequence', variants.sequence);
 
-    // Sanitize before validation
-    if (diagrams.flowchart) diagrams.flowchart = sanitizeMermaidCode(diagrams.flowchart);
-    if (diagrams.sequence) diagrams.sequence = sanitizeMermaidCode(diagrams.sequence);
-
-    // Validate using local mermaid.parse() (same parser as GitHub v11.4.1)
-    const flowchartError = diagrams.flowchart ? await validateMermaid(diagrams.flowchart) : null;
-    const sequenceError = diagrams.sequence ? await validateMermaid(diagrams.sequence) : null;
-
-    if (!flowchartError && !sequenceError) {
+    if (flowchart.errors.length === 0 && sequence.errors.length === 0) {
       if (attempt > 0) {
         core.info(`Mermaid diagrams fixed after ${attempt} retry(s)`);
       }
-      return diagrams;
+      return { flowchart: flowchart.code, sequence: sequence.code };
     }
 
-    // If last attempt, return what we have (strip broken ones)
+    // If last attempt, return whatever validated (broken kinds are dropped).
     if (attempt === maxRetries) {
       core.warning(`Mermaid validation failed after ${maxRetries + 1} attempts`);
-      return {
-        flowchart: flowchartError ? null : diagrams.flowchart,
-        sequence: sequenceError ? null : diagrams.sequence,
-      };
+      return { flowchart: flowchart.code, sequence: sequence.code };
     }
 
-    // Build fix request with error details
+    // Only the kinds where BOTH variants failed reach the fix retry.
     let errorSections = '';
-    if (flowchartError) {
-      errorSections += `**Flowchart error:**\n\`\`\`\n${flowchartError}\n\`\`\`\n\nBroken code:\n\`\`\`mermaid\n${diagrams.flowchart}\n\`\`\`\n\n`;
-    }
-    if (sequenceError) {
-      errorSections += `**Sequence error:**\n\`\`\`\n${sequenceError}\n\`\`\`\n\nBroken code:\n\`\`\`mermaid\n${diagrams.sequence}\n\`\`\`\n\n`;
+    for (const [kind, picked] of [['Flowchart', flowchart], ['Sequence', sequence]] as const) {
+      for (const failure of picked.errors) {
+        errorSections += `**${kind} (${failure.variant}) error:**\n\`\`\`\n${failure.error}\n\`\`\`\n\nBroken code:\n\`\`\`mermaid\n${failure.code}\n\`\`\`\n\n`;
+      }
     }
     // The template file ends with a newline (loadPrompt strips only one of two),
     // matching the original fix-prompt string exactly.
@@ -142,27 +154,70 @@ async function tryGenerateDiagrams(
     messages.push({ role: 'assistant', content: response.content });
     messages.push({ role: 'user', content: fixPrompt });
 
-    core.info(`Mermaid validation failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying: ${(flowchartError || '').substring(0, 100)} ${(sequenceError || '').substring(0, 100)}`);
+    core.info(`Mermaid validation failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying`);
   }
 
   return { flowchart: null, sequence: null };
 }
 
-function parseDiagramResponse(content: string): MermaidDiagrams {
+/**
+ * Sanitizes and validates the styled variant first, falling back to the simple
+ * twin — errors are only surfaced when neither variant parses (that kind then
+ * goes to the fix retry).
+ */
+async function pickBestVariant(kind: string, variants: DiagramVariants): Promise<PickedDiagram> {
+  const errors: PickedDiagram['errors'] = [];
+
+  for (const variant of ['styled', 'simple'] as const) {
+    const raw = variants[variant];
+    if (!raw) continue;
+    const code = sanitizeMermaidCode(raw);
+    const error = await validateMermaid(code);
+    if (!error) {
+      if (variant === 'simple' && variants.styled) {
+        core.info(`${kind}: styled variant failed validation — using the simple fallback`);
+      } else if (variant === 'styled') {
+        core.info(`${kind}: styled variant validated`);
+      }
+      return { code, errors: [] };
+    }
+    errors.push({ variant, error, code });
+    core.debug(`${kind} ${variant} variant invalid: ${error.substring(0, 200)}`);
+  }
+
+  // No variant provided at all is a legitimate "not applicable" (e.g. sequence
+  // set to null), not a failure.
+  return { code: null, errors };
+}
+
+function parseDiagramResponse(content: string): DiagramVariantsResponse {
+  const empty: DiagramVariantsResponse = {
+    flowchart: { styled: null, simple: null },
+    sequence: { styled: null, simple: null },
+  };
+
   try {
     const jsonStr = extractJsonObject(content);
     if (!jsonStr) {
       throw new Error('No JSON object found');
     }
 
-    const parsed = JSON.parse(jsonStr);
+    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+    const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
     return {
-      flowchart: typeof parsed.flowchart === 'string' ? parsed.flowchart : null,
-      sequence: typeof parsed.sequence === 'string' ? parsed.sequence : null,
+      flowchart: {
+        styled: str(parsed.flowchart_styled),
+        // Legacy single-variant key counts as the simple fallback.
+        simple: str(parsed.flowchart_simple) ?? str(parsed.flowchart),
+      },
+      sequence: {
+        styled: str(parsed.sequence_styled),
+        simple: str(parsed.sequence_simple) ?? str(parsed.sequence),
+      },
     };
   } catch (err) {
     core.warning(`Failed to parse diagram response: ${err instanceof Error ? err.message : String(err)}`);
-    return { flowchart: null, sequence: null };
+    return empty;
   }
 }

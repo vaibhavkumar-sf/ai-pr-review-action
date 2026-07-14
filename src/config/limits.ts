@@ -36,8 +36,12 @@ export const CONSOLIDATION_MAX_TOKENS = 8192;
 /** max_tokens for a reply-thread verdict (a short JSON with a 2-5 sentence reply). */
 export const REPLY_VERDICT_MAX_TOKENS = 2048;
 
-/** max_tokens for the cosmetic Mermaid-diagram call. */
-export const DIAGRAM_MAX_TOKENS = 4096;
+/**
+ * max_tokens for the cosmetic Mermaid-diagram call. One response carries FOUR
+ * diagrams (styled + simple twins of flowchart and sequence), so this is double
+ * the old two-diagram budget.
+ */
+export const DIAGRAM_MAX_TOKENS = 8192;
 
 /** The Anthropic API rejects thinking budgets below this floor. */
 export const THINKING_FLOOR_TOKENS = 1024;
