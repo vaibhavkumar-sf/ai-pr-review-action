@@ -17,12 +17,16 @@ export function formatReviewComment(
   result: MergedReviewResult,
   config: ActionConfig,
   context: ReviewContext,
+  rerunNumber = 0,
 ): string {
   const parts: string[] = [];
 
-  // Header (no marker here — postOrUpdateComment adds it)
+  // Header (no marker here — postOrUpdateComment adds it). On a re-run we suffix
+  // the title with the re-run number so readers can tell at a glance this is a
+  // focused re-review and how many times the PR has been re-reviewed.
   const statusIcon = result.passed ? '✅' : '❌';
-  const headerText = config.commentHeader || `${statusIcon} AI Code Review`;
+  const baseHeader = config.commentHeader || `${statusIcon} AI Code Review`;
+  const headerText = rerunNumber > 0 ? `${baseHeader} — Re-run #${rerunNumber}` : baseHeader;
   parts.push(`## ${headerText}`);
   parts.push('');
 

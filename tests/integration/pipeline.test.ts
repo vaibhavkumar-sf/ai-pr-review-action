@@ -57,6 +57,7 @@ jest.mock('../../src/github/pr-commenter', () => {
     resolveStaleInlineComments: jest.fn().mockResolvedValue(0),
     reopenRegressedThreads: jest.fn().mockResolvedValue(0),
     isRerun: jest.fn().mockReturnValue(false),
+    rerunNumber: jest.fn().mockReturnValue(0),
   };
   return {
     PRCommenter: jest.fn(() => instance),
@@ -127,6 +128,7 @@ describe('runReview pipeline (integration)', () => {
 
   it('re-run: inlines only critical/high, reopens regressed threads, keeps the description', async () => {
     commenter.isRerun.mockReturnValue(true);
+    commenter.rerunNumber.mockReturnValue(2);
     commenter.reopenRegressedThreads.mockResolvedValue(1);
     inlineReviewer.postReview.mockResolvedValue(1);
     (gatherAllContext as jest.Mock).mockResolvedValue(makeContext());
@@ -153,6 +155,7 @@ describe('runReview pipeline (integration)', () => {
     const finalPost = posted[posted.length - 1];
     expect(finalPost).toContain('<!-- ai-pr-review-complete -->');
     expect(finalPost).toContain('Re-run focus');
+    expect(finalPost).toContain('AI Code Review — Re-run #2');
   });
 
   it('first run: inlines critical/high/medium and never calls the reopen path', async () => {
