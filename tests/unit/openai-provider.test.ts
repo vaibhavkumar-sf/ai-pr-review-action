@@ -188,3 +188,33 @@ describe('OpenAIProvider tool calling', () => {
     expect(body.messages[2]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'match' });
   });
 });
+
+describe('OpenAIProvider error classification', () => {
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  const classifier = (): { isRateLimitError(e: unknown): boolean; isRetryableError(e: unknown): boolean } =>
+    new TestOpenAI('https://api.test', 'key', ['m'], 0, 0) as unknown as {
+      isRateLimitError(e: unknown): boolean; isRetryableError(e: unknown): boolean;
+    };
+
+  it('classifies HTTP 529 (overloaded) as a capacity error → patient retry schedule', async () => {
+    global.fetch = jest.fn().mockResolvedValue(errorResponse(529)) as unknown as typeof fetch;
+
+    const { observers } = collector();
+    const provider = new TestOpenAI('https://api.test', 'key', ['m'], 0, 0);
+    const err = await provider
+      .run('m', MESSAGES, OPTS, false, 0, observers, new AbortController().signal)
+      .catch((e: Error) => e);
+
+    expect(classifier().isRateLimitError(err)).toBe(true);
+    expect(classifier().isRetryableError(err)).toBe(true);
+  });
+
+  it('classifies a body-reported overload with a non-529 status as capacity too', () => {
+    const c = classifier();
+    expect(c.isRateLimitError(new Error(
+      '500 {"type":"error","error":{"type":"overloaded_error","code":"1305","message":"[1305][The service may be temporarily overloaded, please try again later]"}}',
+    ))).toBe(true);
+    expect(c.isRateLimitError(new Error('HTTP 400: bad request'))).toBe(false);
+  });
+});
