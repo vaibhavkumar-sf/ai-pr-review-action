@@ -114,7 +114,6 @@ Edit `prompts/*.md` (review criteria) or `prompts/system/*.md` (meta-prompts: ou
 ### Modify Mermaid handling
 - Sanitizer + Kroki validation: `src/utils/mermaid.ts`
 - AI diagram generation: `src/results/image-diagram-generator.ts` + `prompts/system/mermaid-diagrams.md` / `mermaid-fix.md`
-- Import-based architecture diagram: `src/results/diagram-generator.ts`
 
 ## Testing
 

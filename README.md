@@ -171,7 +171,7 @@ Set `post_data_url` to POST the full review result — aggregate metrics plus ev
 post_data_url: ${{ secrets.AI_REVIEW_POST_DATA_URL }}
 ```
 
-The request is fire-and-forget (10s timeout, never fails the action). Each run is stored as a **separate row**, so re-reviews of a PR are tracked individually (run 1: 10 new findings; run 2: 2 resolved, 8 carried over, 4 new, 4 replies answered — the full story stays queryable). The exact metrics sent are also posted on the PR itself as the "📊 Backstage Tracking Metrics" table in the summary comment (severity counts, per-category counts, new/carried-over comments, threads resolved, replies posted, bot comments hidden). See [`docs/backstage-integration.md`](docs/backstage-integration.md) for the payload contract and the suggested database schema (`ai_code_reviews` + `ai_review_findings` tables).
+The request is fire-and-forget (10s timeout, never fails the action). Each run is stored as a **separate row**, so re-reviews of a PR are tracked individually (run 1: 10 new findings; run 2: 2 resolved, 8 carried over, 4 new, 4 replies answered — the full story stays queryable). The exact metrics sent are also posted on the PR itself as the "📊 Tracking Metrics" section at the top of the summary comment (severity counts, per-category counts, new/carried-over comments, threads resolved, replies posted, bot comments hidden). See [`docs/backstage-integration.md`](docs/backstage-integration.md) for the payload contract and the suggested database schema (`ai_code_reviews` + `ai_review_findings` tables).
 
 ## Backstage Scaffolder Template
 

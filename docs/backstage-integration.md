@@ -136,7 +136,7 @@ The payload is not sent when the review is skipped (`too_many_files` / `no_agent
 | Run 2 (re-push) | `stale_threads_resolved: 2` (fixed in code), `inline_comments_existing: 8` (still open), `inline_comments_new: 4` (new critical/high issues — re-runs never post new medium/low inline), `threads_reopened: 1` (a resolved critical came back), `replies_posted: 4` (humans pushed back, all answered), `threads_resolved_from_replies: 1` |
 | Run 3 (re-push) | ... and so on |
 
-Group rows by `repo_name` + `pr_number` (ordered by `run_timestamp`) to get "this PR was reviewed 3 times"; `head_sha` distinguishes the exact commit each run reviewed. The same metrics table is also posted on the PR itself (the "📊 Backstage Tracking Metrics" section of the summary comment), so reviewers see exactly what was recorded.
+Group rows by `repo_name` + `pr_number` (ordered by `run_timestamp`) to get "this PR was reviewed 3 times"; `head_sha` distinguishes the exact commit each run reviewed. The same metrics table is also posted on the PR itself (the "📊 Tracking Metrics" section at the top of the summary comment), so reviewers see exactly what was recorded.
 
 ## Suggested database schema
 
