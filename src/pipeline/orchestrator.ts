@@ -417,6 +417,15 @@ async function postInlineComments(
     return { staleThreadsResolved: 0, threadsReopened: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 };
   }
 
+  // Degenerate-result guard: a review that found NOTHING is far more likely a
+  // broken/misparsed model response than a suddenly-perfect PR, and treating
+  // it as ground truth would mass-resolve every open thread as "fixed".
+  // Threads resolve on the next run that produces at least one finding.
+  if (merged.totalFindings === 0) {
+    logger.info('Review found 0 findings — skipping stale-thread resolution and inline pass (degenerate-result guard)');
+    return { staleThreadsResolved: 0, threadsReopened: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 };
+  }
+
   // Resolve old inline comments that are no longer relevant. ALL severities
   // are passed, so a fixed medium/low still gets its thread resolved even
   // though re-runs never post new medium/low comments.

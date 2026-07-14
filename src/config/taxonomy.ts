@@ -25,6 +25,7 @@ export const CATEGORIES = [
   { id: 'architecture', label: '🏗️ Architecture', agentLabel: '🏗️ Architecture' },
   { id: 'testing', label: '🧪 Testing', agentLabel: '🧪 Testing' },
   { id: 'api-design', label: '🔌 API Design', agentLabel: '🔌 API Design' },
+  { id: 'documentation', label: '📚 Documentation', agentLabel: '📚 Documentation' },
   { id: 'comprehensive', label: '🔎 Comprehensive', agentLabel: '🔎 Comprehensive Review' },
 ] as const;
 

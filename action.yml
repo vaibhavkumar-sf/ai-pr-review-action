@@ -54,11 +54,11 @@ inputs:
     default: '0.2'
   # ─── Review Mode ─────────────────────────────────────────
   review_mode:
-    description: 'combined (default): one comprehensive all-at-once review covering every category. separate: 7 parallel specialist agents selected by review_profile/toggles'
+    description: 'combined (default): one comprehensive all-at-once review covering every category. separate: 8 parallel specialist agents selected by review_profile/toggles'
     required: false
     default: 'combined'
   review_profile:
-    description: 'Review intensity for separate mode: strict (all 7 agents), standard (5 agents), minimal (2 agents). Ignored in combined mode'
+    description: 'Review intensity for separate mode: strict (all 8 agents), standard (6 agents), minimal (2 agents). Ignored in combined mode'
     required: false
     default: 'standard'
   # ─── Individual Review Toggles (override profile) ────────
@@ -88,6 +88,10 @@ inputs:
     default: ''
   enable_api_design_review:
     description: 'Enable/disable the api design review agent in separate mode (true/false overrides the profile; empty follows the profile)'
+    required: false
+    default: ''
+  enable_documentation_review:
+    description: 'Enable/disable the documentation review agent in separate mode (true/false overrides the profile; empty follows the profile)'
     required: false
     default: ''
   # ─── Framework Configuration ─────────────────────────────
@@ -287,6 +291,7 @@ runs:
     INPUT_ENABLE_ARCHITECTURE_REVIEW: ${{ inputs.enable_architecture_review }}
     INPUT_ENABLE_TESTING_REVIEW: ${{ inputs.enable_testing_review }}
     INPUT_ENABLE_API_DESIGN_REVIEW: ${{ inputs.enable_api_design_review }}
+    INPUT_ENABLE_DOCUMENTATION_REVIEW: ${{ inputs.enable_documentation_review }}
     INPUT_FRAMEWORK: ${{ inputs.framework }}
     INPUT_PR_NUMBER: ${{ inputs.pr_number }}
     INPUT_JIRA_URL: ${{ inputs.jira_url }}

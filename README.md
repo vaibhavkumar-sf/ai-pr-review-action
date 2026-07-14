@@ -32,7 +32,7 @@ That's it. Three lines of config for a full review.
 | Mode | How it works |
 |------|--------------|
 | `combined` (default) | ONE comprehensive agent reviews everything at once in a single exhaustive pass — modeled on an expert reviewer walking a full checklist per file. Each finding is still tagged with its own category and severity. `review_profile` and the `enable_*_review` toggles are ignored. |
-| `separate` | 7 parallel specialist agents (selected by `review_profile` / toggles) each review their own dimension; findings are deduplicated and AI-consolidated afterwards. |
+| `separate` | 8 parallel specialist agents (selected by `review_profile` / toggles) each review their own dimension; findings are deduplicated and AI-consolidated afterwards. |
 
 ```yaml
 review_mode: 'combined'   # or 'separate'

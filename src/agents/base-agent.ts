@@ -250,6 +250,17 @@ export abstract class BaseAgent {
         };
       }
 
+      // Zero findings from a long response is legit ("clean PR") but is also
+      // the signature of a degenerate/misparsed answer — log the head so the
+      // Action log alone can tell which one it was.
+      if (parsed.findings.length === 0 && response.content.length > ERROR_SNIPPET_CHARS) {
+        const snippet = response.content.slice(0, ERROR_SNIPPET_CHARS).replace(/\s+/g, ' ').trim();
+        core.info(
+          `Agent ${this.name}: 0 findings parsed from a ${response.content.length}-char response `
+          + `(summary: ${parsed.summary.slice(0, 200) || '(none)'}). First ${ERROR_SNIPPET_CHARS} chars: ${snippet}`,
+        );
+      }
+
       return {
         agentName: this.name,
         category: this.category,
@@ -650,6 +661,7 @@ export abstract class BaseAgent {
       if (completed) candidates.push(completed, sanitizeJsonText(completed));
     }
 
+    let sawNonContractJson = false;
     for (const candidate of candidates) {
       let parsed: { findings?: Record<string, unknown>[]; summary?: unknown; score?: unknown };
       try {
@@ -661,7 +673,20 @@ export abstract class BaseAgent {
         );
         continue;
       }
-      const findings = (parsed.findings || []).map(
+      // The contract REQUIRES a findings[] array. A parseable JSON object
+      // without it is almost certainly not the review answer (a stray object
+      // extracted from prose, or the answer nested under another key) —
+      // accepting it silently reported "0 findings" for responses that DID
+      // contain findings. Fall through to salvage / the AI heal retry instead.
+      if (!Array.isArray(parsed.findings)) {
+        sawNonContractJson = true;
+        core.debug(
+          `Agent ${this.name}: parsed JSON lacks a findings[] array `
+          + `(keys: ${Object.keys(parsed).join(', ') || 'none'}) — not accepting it as the review answer`,
+        );
+        continue;
+      }
+      const findings = parsed.findings.map(
         (f: Record<string, unknown>) => coerceFinding(f, raw => this.resolveCategory(raw)),
       );
       return {
@@ -669,6 +694,12 @@ export abstract class BaseAgent {
         summary: typeof parsed.summary === 'string' ? parsed.summary : '',
         score: typeof parsed.score === 'number' ? parsed.score : 5,
       };
+    }
+    if (sawNonContractJson) {
+      core.warning(
+        `Agent ${this.name}: response contained JSON but no findings[] array — `
+        + 'treating as unparseable so the salvage/heal path can recover the real answer',
+      );
     }
 
     // Last resort: recover intact finding objects individually so one broken

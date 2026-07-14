@@ -78,6 +78,7 @@ export interface BackstageReviewPayload {
   architecture_count: number;
   testing_count: number;
   api_design_count: number;
+  documentation_count: number;
   average_score: number;
   agents_run: string;
   agents_failed: string;
@@ -166,6 +167,7 @@ export async function reportRunOutcome(
     architecture_count: 0,
     testing_count: 0,
     api_design_count: 0,
+    documentation_count: 0,
     average_score: 0,
     agents_run: '',
     agents_failed: '',
@@ -266,6 +268,7 @@ function buildPayload(
     architecture_count: categoryCounts['architecture'] || 0,
     testing_count: categoryCounts['testing'] || 0,
     api_design_count: categoryCounts['api-design'] || 0,
+    documentation_count: categoryCounts['documentation'] || 0,
     average_score: averageScore,
     agents_run: agentResults.map(r => r.agentName).join(','),
     agents_failed: agentResults.filter(r => r.error).map(r => r.agentName).join(','),
