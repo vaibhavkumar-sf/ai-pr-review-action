@@ -47,6 +47,19 @@ export function rateLimitBackoffMs(retryCount: number): number {
   );
 }
 
+/**
+ * One model's retry budget is spent (or its failure was terminal for that
+ * model). `fallbackWorthy` is true when the failure was capacity/transient/
+ * timeout — conditions another model in the chain may not share — and false
+ * for request-shaped errors (bad request, auth) that would fail everywhere.
+ */
+export class ModelExhaustedError extends Error {
+  constructor(message: string, readonly fallbackWorthy: boolean) {
+    super(message);
+    this.name = 'ModelExhaustedError';
+  }
+}
+
 export function extractAdvertisedOutputCap(message: string): number | null {
   if (!/max_tokens|output tokens|completion tokens/i.test(message)) return null;
   const patterns = [
@@ -68,17 +81,20 @@ export function extractAdvertisedOutputCap(message: string): number | null {
  * Shared provider machinery — every hard-won reliability behavior lives here,
  * once, for all API dialects:
  *
- * - Model fallback chain: candidates tried in order, advancing ONLY on
- *   "unknown model" rejections; the first that works is latched for all
- *   later calls.
+ * - Model fallback chain: candidates tried in order, advancing on "unknown
+ *   model" rejections AND on exhausted capacity/transient/timeout failures
+ *   (a run must not die on an overloaded primary while fallbacks sit untried);
+ *   the model that works is latched first-in-line for all later calls, with
+ *   the rest of the chain still behind it.
  * - Pre-flight probe: a tiny request that resolves the working model and
  *   fails fast (and loudly) on a hung/unreachable endpoint.
- * - Retry with backoff: Retry-After header respected; rate limits (429) get
- *   their own patient budget (up to RATE_LIMIT_MAX_ATTEMPTS retries with an
- *   ESCALATING wait, independent of max_retries — polite polling, not
- *   hammering), other transient errors back off exponentially; timeouts are
- *   TERMINAL (a retry would just burn another full timeout window on the
- *   same slow call).
+ * - Retry with backoff: Retry-After header respected; capacity errors (429
+ *   rate limit, 529 overloaded) get their own patient budget (up to
+ *   RATE_LIMIT_MAX_ATTEMPTS retries with an ESCALATING wait, independent of
+ *   max_retries — polite polling, not hammering), other transient errors back
+ *   off exponentially; timeouts are terminal for the model (a retry would just
+ *   burn another full timeout window on the same slow call) but still fall
+ *   back to the next model in the chain.
  * - Streaming heartbeat: periodic "thinking — N chars" log lines so a long
  *   call is visibly alive instead of silent.
  * - Thinking fallback: if the endpoint rejects the thinking param, it is
@@ -88,8 +104,10 @@ export function extractAdvertisedOutputCap(message: string): number | null {
  * and how to classify that dialect's errors.
  */
 export abstract class BaseProvider implements AIProvider {
-  // Ordered fallback chain: tried in order, advancing only on "unknown model"
-  // errors. Once one works it is latched into `resolvedModel` for all later calls.
+  // Ordered fallback chain: tried in order, advancing on "unknown model"
+  // rejections and exhausted capacity/transient/timeout failures. The working
+  // model is latched into `resolvedModel` and tried first on later calls, with
+  // the chain models behind it still available as fallbacks.
   protected models: string[];
   protected resolvedModel?: string;
   protected maxRetries: number;
@@ -299,7 +317,9 @@ export abstract class BaseProvider implements AIProvider {
           continue;
         }
         // Connectivity/auth failure, or hang budget exhausted — record a clear
-        // message and stop.
+        // message and try the next chain candidate (probes are tiny, and the
+        // retry budgets above are shared across candidates, so a dead endpoint
+        // still fails fast; a per-model outage is exactly what the chain is for).
         lastError = timedOut
           ? new Error(
               `${model} did not respond within ${Math.round(timeoutMs / 1000)}s `
@@ -307,6 +327,11 @@ export abstract class BaseProvider implements AIProvider {
               + 'The AI endpoint is unreachable or overloaded.',
             )
           : error instanceof Error ? error : new Error(String(error));
+        const nextCandidate = candidates[i + 1];
+        if (nextCandidate) {
+          core.warning(`Pre-flight: ${model} failed (${lastError.message}); trying "${nextCandidate}"`);
+          continue;
+        }
         break;
       }
     }
@@ -330,27 +355,39 @@ export abstract class BaseProvider implements AIProvider {
       + `timeout=${Math.round(options.timeout / 1000)}s`,
     );
 
-    // Try each candidate model in order; advance only when a model is rejected as
-    // unknown/unsupported. Once resolved, later calls use just that model.
-    const candidates = this.resolvedModel ? [this.resolvedModel] : this.models;
-    let lastUnknownModelError: Error | undefined;
+    // Try each candidate model in order, advancing when one is rejected as
+    // unknown/unsupported OR when it exhausts its retries on a capacity/
+    // transient/timeout failure the next model may not share (an overloaded
+    // glm-5.2 must cascade to the rest of the chain, not fail the run). The
+    // latched model goes first, but the chain BEHIND it stays reachable so a
+    // mid-run overload storm can still fall back.
+    const latchedIdx = this.resolvedModel ? this.models.indexOf(this.resolvedModel) : 0;
+    const candidates = latchedIdx >= 0 ? this.models.slice(latchedIdx) : this.models;
+    let lastError: Error | undefined;
 
     for (let mi = 0; mi < candidates.length; mi++) {
       const model = candidates[mi];
       try {
         const result = await this.chatWithModel(model, messages, options);
-        if (!this.resolvedModel) {
+        if (this.resolvedModel !== model) {
           this.resolvedModel = model;
           core.info(`Using model: ${model}`);
         }
         return result;
       } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const next = candidates[mi + 1];
         if (this.isUnknownModelError(error)) {
-          lastUnknownModelError = error instanceof Error ? error : new Error(String(error));
-          const next = candidates[mi + 1];
           core.warning(
             `Model "${model}" was rejected as unknown/unsupported`
             + (next ? `; falling back to "${next}"` : ' — no more fallbacks'),
+          );
+          continue;
+        }
+        if (error instanceof ModelExhaustedError && error.fallbackWorthy && next) {
+          core.warning(
+            `Model "${model}" exhausted its retries on a transient failure; `
+            + `falling back to "${next}"`,
           );
           continue;
         }
@@ -359,8 +396,8 @@ export abstract class BaseProvider implements AIProvider {
     }
 
     throw new Error(
-      `All candidate models were rejected as unknown (${candidates.join(', ')}): `
-      + `${lastUnknownModelError?.message ?? 'Unknown error'}`,
+      `All candidate models failed (${candidates.join(', ')}): `
+      + `${lastError?.message ?? 'Unknown error'}`,
     );
   }
 
@@ -435,9 +472,14 @@ export abstract class BaseProvider implements AIProvider {
 
     let lastError: Error | undefined;
     let attemptsMade = 0;
-    // Two independent retry budgets: 429s are quota churn that clears with
-    // patience (many short waits), everything else transient gets the small
-    // user-configured max_retries with exponential backoff.
+    // Whether giving up on THIS model justifies trying the next one in the
+    // chain (capacity/transient/timeout failures do; request-shaped errors
+    // like bad-request/auth would fail on every model and must not).
+    let fallbackWorthy = false;
+    // Two independent retry budgets: capacity errors (429 rate limit, 529
+    // overloaded) are quota churn that clears with patience (many escalating
+    // waits), everything else transient gets the small user-configured
+    // max_retries with exponential backoff.
     let rateLimitRetries = 0;
     let rateLimitWaitedMs = 0;
     let transientRetries = 0;
@@ -561,9 +603,11 @@ export abstract class BaseProvider implements AIProvider {
           continue;
         }
 
-        // A timeout is terminal: a retry just burns another full timeout window on
-        // the same slow call. Report it clearly and stop trying this model.
+        // A timeout is terminal FOR THIS MODEL: a retry just burns another full
+        // timeout window on the same slow call. But a different model in the
+        // chain may be faster, so the failure is still fallback-worthy.
         if (timedOut) {
+          fallbackWorthy = true;
           core.warning(`${model} attempt ${attemptsMade}: ${lastError.message}`);
           break;
         }
@@ -585,12 +629,12 @@ export abstract class BaseProvider implements AIProvider {
         const retryAfterMs = this.getRetryAfterMs(error);
         const isRateLimit = retryAfterMs > 0 || this.isRateLimitError(error);
 
-        // Rate limit (429): wait and try again, up to RATE_LIMIT_MAX_ATTEMPTS
-        // and RATE_LIMIT_MAX_TOTAL_WAIT_MS — independent of the max_retries
-        // budget, because 429s clear with patience, not with speed. The wait
-        // ESCALATES while 429s persist (Retry-After takes precedence): a
-        // fair-usage limiter punishes request frequency, so polling politely
-        // beats hammering on a fixed short cadence.
+        // Capacity errors (429 rate limit, 529 overloaded): wait and try again,
+        // up to RATE_LIMIT_MAX_ATTEMPTS and RATE_LIMIT_MAX_TOTAL_WAIT_MS —
+        // independent of the max_retries budget, because capacity errors clear
+        // with patience, not with speed. The wait ESCALATES while they persist
+        // (Retry-After takes precedence): a fair-usage limiter punishes request
+        // frequency, so polling politely beats hammering on a fixed short cadence.
         if (
           isRateLimit
           && rateLimitRetries < RATE_LIMIT_MAX_ATTEMPTS
@@ -601,7 +645,7 @@ export abstract class BaseProvider implements AIProvider {
           rateLimitWaitedMs += delayMs;
           core.warning(
             `${model} attempt ${attemptsMade} failed after ${attemptSec}s: ${lastError.message}. `
-            + `Rate limited — waiting ${Math.round(delayMs / 1000)}s before retry `
+            + `Rate limited/overloaded — waiting ${Math.round(delayMs / 1000)}s before retry `
             + `${rateLimitRetries}/${RATE_LIMIT_MAX_ATTEMPTS} `
             + `(${Math.round(rateLimitWaitedMs / 1000)}s waited in total)`,
           );
@@ -621,9 +665,10 @@ export abstract class BaseProvider implements AIProvider {
           continue;
         }
 
+        fallbackWorthy = isRateLimit || this.isRetryableError(error);
         core.warning(
           `${model} attempt ${attemptsMade} failed after ${attemptSec}s `
-          + `(${this.isRetryableError(error) ? 'retries exhausted' : 'not retryable'}): ${lastError.message}`,
+          + `(${fallbackWorthy ? 'retries exhausted' : 'not retryable'}): ${lastError.message}`,
         );
         break;
       } finally {
@@ -632,8 +677,9 @@ export abstract class BaseProvider implements AIProvider {
       }
     }
 
-    throw new Error(
+    throw new ModelExhaustedError(
       `${model} call failed after ${attemptsMade} attempt(s): ${lastError?.message ?? 'Unknown error'}`,
+      fallbackWorthy,
     );
   }
 

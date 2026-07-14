@@ -100,6 +100,15 @@ export const BACKSTAGE_TIMEOUT_MS = 10000;
 export const RETRYABLE_HTTP_STATUS = [429, 500, 502, 503, 529];
 
 /**
+ * Capacity errors — the endpoint is alive but out of quota/headroom right now:
+ * 429=rate limited, 529=overloaded. These clear with PATIENCE, not speed, so
+ * they get the escalating rate-limit schedule (10s → 120s, hours of budget)
+ * instead of the fast transient backoff (2s/4s/8s), which is useless against
+ * an overload spell that lasts minutes.
+ */
+export const CAPACITY_HTTP_STATUS = [429, 529];
+
+/**
  * Rate limits (429) get their own patient retry budget, independent of
  * max_retries: quota churn on shared endpoints clears in seconds-to-minutes,
  * and a long wait beats failing the whole review run. 400 × 10s ≈ 67 min of

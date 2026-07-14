@@ -1,6 +1,6 @@
 import { ChatMessage, ChatOptions, ChatResponse } from './ai-provider';
 import { BaseProvider, extractAdvertisedOutputCap, StreamObservers } from './base-provider';
-import { PREFLIGHT_MAX_TOKENS, PREFLIGHT_TEMPERATURE, RETRYABLE_HTTP_STATUS } from '../config/limits';
+import { CAPACITY_HTTP_STATUS, PREFLIGHT_MAX_TOKENS, PREFLIGHT_TEMPERATURE, RETRYABLE_HTTP_STATUS } from '../config/limits';
 
 /**
  * OpenAI-dialect adapter: raw fetch + SSE streaming against any
@@ -277,7 +277,10 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   protected isRateLimitError(error: unknown): boolean {
-    return error instanceof OpenAIHttpError && error.status === 429;
+    if (error instanceof OpenAIHttpError && CAPACITY_HTTP_STATUS.includes(error.status)) return true;
+    // Some gateways report overload in the body with a non-529 status.
+    const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    return msg.includes('overloaded_error') || msg.includes('temporarily overloaded');
   }
 
   protected parseOutputCapError(error: unknown): number | null {

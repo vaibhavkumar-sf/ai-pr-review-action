@@ -163,7 +163,66 @@ describe('BaseProvider engine', () => {
     const provider = new FakeProvider(['a', 'b'], 1, 0, async () => {
       throw new Error('UNKNOWN_MODEL');
     });
-    await expect(provider.chat(MESSAGES, OPTS)).rejects.toThrow(/rejected as unknown/);
+    await expect(provider.chat(MESSAGES, OPTS)).rejects.toThrow(/All candidate models failed/);
+  });
+
+  it('falls back to the next model when one exhausts its transient retries, and latches the winner', async () => {
+    const provider = new FakeProvider(['flaky', 'solid'], 1, 0, async ({ model }) => {
+      if (model === 'flaky') throw new Error('RETRYABLE: 529 overloaded');
+      return OK;
+    });
+
+    const res = await provider.chat(MESSAGES, OPTS);
+    expect(res.content).toBe('ok');
+    // flaky: initial attempt + maxRetries=1 retry, then the chain advances.
+    expect(provider.calls.map(c => c.model)).toEqual(['flaky', 'flaky', 'solid']);
+    expect(provider.getResolvedModel()).toBe('solid');
+
+    // The winner is latched: the next call goes straight to it.
+    await provider.chat(MESSAGES, OPTS);
+    expect(provider.calls[provider.calls.length - 1].model).toBe('solid');
+  });
+
+  it('falls back past an already-latched model when it starts failing mid-run', async () => {
+    let healthy = true;
+    const provider = new FakeProvider(['primary', 'backup'], 0, 0, async ({ model }) => {
+      if (model === 'primary' && !healthy) throw new Error('RETRYABLE: 529 overloaded');
+      return OK;
+    });
+
+    await provider.chat(MESSAGES, OPTS); // latches primary
+    expect(provider.getResolvedModel()).toBe('primary');
+
+    healthy = false; // overload storm begins mid-run
+    const res = await provider.chat(MESSAGES, OPTS);
+    expect(res.content).toBe('ok');
+    expect(provider.getResolvedModel()).toBe('backup');
+  });
+
+  it('does NOT fall back on a non-retryable (request-shaped) error', async () => {
+    const provider = new FakeProvider(['a', 'b'], 2, 0, async ({ model }) => {
+      if (model === 'a') throw new Error('FATAL: invalid request body');
+      return OK;
+    });
+
+    await expect(provider.chat(MESSAGES, OPTS)).rejects.toThrow(/invalid request body/);
+    expect(provider.calls.map(c => c.model)).toEqual(['a']); // b never tried
+  });
+
+  it('falls back to the next model after a timeout instead of failing the run', async () => {
+    const provider = new FakeProvider(['slow', 'fast'], 3, 0, async ({ model, signal }) => {
+      if (model === 'slow') {
+        return new Promise<ChatResponse>((_, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      }
+      return OK;
+    });
+
+    const res = await provider.chat(MESSAGES, { ...OPTS, timeout: 50 });
+    expect(res.content).toBe('ok');
+    // slow is tried exactly once (no same-model timeout retry), then fast.
+    expect(provider.calls.map(c => c.model)).toEqual(['slow', 'fast']);
   });
 
   it('verifyConnection latches the first working model', async () => {
@@ -225,6 +284,21 @@ describe('BaseProvider engine', () => {
     provider.probeHandler = async () => { throw new Error('401 unauthorized'); };
 
     await expect(provider.verifyConnection(1000)).rejects.toThrow(/pre-flight check failed/);
+  });
+
+  it('pre-flight tries the next chain candidate after a terminal probe failure', async () => {
+    const probed: string[] = [];
+    const provider = new FakeProvider(['down', 'up'], 0, 0, async () => OK);
+    provider.probeHandler = async () => {
+      // FakeProvider.probe ignores the model, so track order by call count.
+      probed.push(probed.length === 0 ? 'down' : 'up');
+      if (probed.length === 1) throw new Error('502 bad gateway upstream');
+      return { outputTokens: 1 };
+    };
+
+    const result = await provider.verifyConnection(1000);
+    expect(result.model).toBe('up');
+    expect(probed).toEqual(['down', 'up']);
   });
 
   it('clamps the sent output budget to the assumed ceiling', async () => {

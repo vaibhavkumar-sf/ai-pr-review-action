@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ChatMessage, ChatOptions, ChatResponse } from './ai-provider';
 import { BaseProvider, extractAdvertisedOutputCap, StreamObservers } from './base-provider';
-import { PREFLIGHT_MAX_TOKENS, PREFLIGHT_TEMPERATURE, RETRYABLE_HTTP_STATUS } from '../config/limits';
+import { CAPACITY_HTTP_STATUS, PREFLIGHT_MAX_TOKENS, PREFLIGHT_TEMPERATURE, RETRYABLE_HTTP_STATUS } from '../config/limits';
 
 /**
  * Anthropic-dialect adapter (api.anthropic.com and compatible endpoints such
@@ -193,7 +193,10 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   protected isRateLimitError(error: unknown): boolean {
-    return error instanceof Anthropic.APIError && error.status === 429;
+    if (error instanceof Anthropic.APIError && CAPACITY_HTTP_STATUS.includes(error.status)) return true;
+    // Some gateways report overload in the body with a non-529 status.
+    const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    return msg.includes('overloaded_error') || msg.includes('temporarily overloaded');
   }
 
   protected parseOutputCapError(error: unknown): number | null {
