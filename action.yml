@@ -29,9 +29,9 @@ inputs:
     required: false
     default: 'https://api.anthropic.com'
   anthropic_model:
-    description: 'Model id, or a comma-separated fallback chain tried in order (the next is used only when a model is rejected as unknown by the endpoint). Default tries GLM-5.2, then its 1M variant, then a Claude-tier name the z.ai endpoint maps to GLM'
+    description: 'Model id, or a comma-separated fallback chain tried in order (the next is used when a model is rejected as unknown or exhausts its retries on a capacity/transient failure)'
     required: false
-    default: 'glm-5.2,glm-5.2[1m],claude-opus-4-8'
+    default: 'glm-5.2'
   max_tokens:
     description: '0 (default) = auto: use the model''s full native output capacity (e.g. 131072 on GLM-5.2) so a review is never truncated by a self-imposed cap; if an endpoint advertises a smaller maximum in its rejection, it is discovered and latched automatically. Set a positive number to cap output tokens manually'
     required: false

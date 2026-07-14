@@ -70,9 +70,9 @@ export const INPUTS: readonly InputSpec[] = [
   {
     name: 'anthropic_model',
     type: 'string',
-    default: 'glm-5.2,glm-5.2[1m],claude-opus-4-8',
+    default: 'glm-5.2',
     group: 'Provider Configuration',
-    description: 'Model id, or a comma-separated fallback chain tried in order (the next is used only when a model is rejected as unknown by the endpoint). Default tries GLM-5.2, then its 1M variant, then a Claude-tier name the z.ai endpoint maps to GLM',
+    description: 'Model id, or a comma-separated fallback chain tried in order (the next is used when a model is rejected as unknown or exhausts its retries on a capacity/transient failure)',
   },
   {
     name: 'max_tokens',

@@ -26,7 +26,7 @@ Findings are posted as structured PR comments with inline code annotations, and 
 | Type definitions | `src/types.ts` |
 | Architecture docs | `docs/architecture.md` (plan: `docs/refactor-plan.md`) |
 | Examples | `examples/*.yml` |
-| Default model chain | `glm-5.2,glm-5.2[1m],claude-opus-4-8` (org z.ai endpoint) — override per provider |
+| Default model chain | `glm-5.2` (org z.ai endpoint) — comma-separated fallback chain supported, override per provider |
 
 ## Build & Run
 
