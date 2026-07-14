@@ -6,6 +6,8 @@ import {
   coerceFinding,
   coerceSeverity,
   INLINE_SEVERITIES,
+  inlineSeveritiesFor,
+  RERUN_INLINE_SEVERITIES,
   SEVERITY_ICONS,
   SEVERITY_LABELS,
   SEVERITY_RANK,
@@ -72,6 +74,18 @@ describe('taxonomy derived maps', () => {
 
   it('inline severities are critical/high/medium only', () => {
     expect([...INLINE_SEVERITIES].sort()).toEqual(['critical', 'high', 'medium']);
+  });
+
+  it('re-run inline severities are exactly critical/high and a subset of the first-run set', () => {
+    expect([...RERUN_INLINE_SEVERITIES].sort()).toEqual(['critical', 'high']);
+    for (const severity of RERUN_INLINE_SEVERITIES) {
+      expect(INLINE_SEVERITIES.has(severity)).toBe(true);
+    }
+  });
+
+  it('inlineSeveritiesFor switches on the re-run flag', () => {
+    expect(inlineSeveritiesFor(false)).toBe(INLINE_SEVERITIES);
+    expect(inlineSeveritiesFor(true)).toBe(RERUN_INLINE_SEVERITIES);
   });
 });
 

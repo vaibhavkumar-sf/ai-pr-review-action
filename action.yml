@@ -134,6 +134,10 @@ inputs:
     description: 'Verify human replies on previous review threads against the code, post a justification reply in each, and resolve the thread when the reply is valid'
     required: false
     default: 'true'
+  enable_rerun_focus:
+    description: 'On re-runs (a completed AI review already exists on this PR): limit NEW inline comments to critical/high findings, reopen resolved threads whose critical/high issue reappeared, and keep the existing PR description/diagrams. Summary totals still count all severities. Disable to restore full first-run behavior on every run'
+    required: false
+    default: 'true'
   enable_bot_comment_cleanup:
     description: 'Minimize noisy recurring bot comments (e.g. sonarqubecloud, unit-test-quality reports): known noise is hidden entirely, other recurring types keep only the latest occurrence'
     required: false
@@ -242,6 +246,8 @@ outputs:
     description: 'Number of justification replies posted on review threads that had human replies'
   threads_resolved_from_replies:
     description: 'Number of threads resolved because a human reply was verified as valid'
+  threads_reopened:
+    description: 'Number of resolved threads reopened because their critical/high issue was detected again on a re-run'
   bot_comments_hidden:
     description: 'Number of noisy bot comments minimized during cleanup'
 
@@ -279,6 +285,7 @@ runs:
     INPUT_POST_INLINE_COMMENTS: ${{ inputs.post_inline_comments }}
     INPUT_POST_DATA_URL: ${{ inputs.post_data_url }}
     INPUT_ENABLE_REPLY_HANDLING: ${{ inputs.enable_reply_handling }}
+    INPUT_ENABLE_RERUN_FOCUS: ${{ inputs.enable_rerun_focus }}
     INPUT_ENABLE_BOT_COMMENT_CLEANUP: ${{ inputs.enable_bot_comment_cleanup }}
     INPUT_MAX_FILES_TO_REVIEW: ${{ inputs.max_files_to_review }}
     INPUT_EXCLUDE_PATTERNS: ${{ inputs.exclude_patterns }}

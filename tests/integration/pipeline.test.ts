@@ -28,6 +28,16 @@ jest.mock('../../src/pipeline/description-updater', () => ({
 jest.mock('../../src/context', () => ({ gatherAllContext: jest.fn() }));
 jest.mock('../../src/agents', () => ({ createAgents: jest.fn() }));
 
+jest.mock('../../src/github/inline-reviewer', () => {
+  const instance = { postReview: jest.fn().mockResolvedValue(1) };
+  return {
+    InlineReviewer: jest.fn(() => instance),
+    INLINE_COMMENT_MARKER: '<!-- ai-pr-review-inline -->',
+    buildFingerprintMarker: jest.fn(() => '<!-- fp -->'),
+    __instance: instance,
+  };
+});
+
 jest.mock('../../src/providers/provider-factory', () => {
   const provider = {
     logDiagnostics: jest.fn().mockResolvedValue(undefined),
@@ -44,8 +54,15 @@ jest.mock('../../src/github/pr-commenter', () => {
     cleanupBotComments: jest.fn().mockResolvedValue(2),
     updateProgress: jest.fn().mockResolvedValue(undefined),
     resolveStaleInlineComments: jest.fn().mockResolvedValue(0),
+    reopenRegressedThreads: jest.fn().mockResolvedValue(0),
+    isRerun: jest.fn().mockReturnValue(false),
   };
-  return { PRCommenter: jest.fn(() => instance), __instance: instance };
+  return {
+    PRCommenter: jest.fn(() => instance),
+    REVIEW_COMPLETE_MARKER: '<!-- ai-pr-review-complete -->',
+    REOPEN_MARKER: '<!-- ai-pr-review-reopen -->',
+    __instance: instance,
+  };
 });
 
 import * as core from '@actions/core';
@@ -55,6 +72,8 @@ import { createAgents } from '../../src/agents';
 
 const providerMock = jest.requireMock('../../src/providers/provider-factory').__provider;
 const commenter = jest.requireMock('../../src/github/pr-commenter').__instance;
+const inlineReviewer = jest.requireMock('../../src/github/inline-reviewer').__instance;
+const { appendToPRDescription } = jest.requireMock('../../src/pipeline/description-updater');
 
 function output(key: string): unknown {
   const call = (core.setOutput as jest.Mock).mock.calls.find(c => c[0] === key);
@@ -85,6 +104,8 @@ describe('runReview pipeline (integration)', () => {
     commenter.postOrUpdateComment.mockResolvedValue({ commentId: 'c1', commentUrl: 'https://gh/c1' });
     commenter.cleanupBotComments.mockResolvedValue(2);
     commenter.resolveStaleInlineComments.mockResolvedValue(0);
+    commenter.reopenRegressedThreads.mockResolvedValue(0);
+    commenter.isRerun.mockReturnValue(false);
     (createAgents as jest.Mock).mockReturnValue([stubAgent()]);
   });
 
@@ -101,6 +122,54 @@ describe('runReview pipeline (integration)', () => {
     const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
     expect(posted.some((c: string) => c.includes('SQL injection'))).toBe(true);
     expect(core.setFailed).not.toHaveBeenCalled();
+  });
+
+  it('re-run: inlines only critical/high, reopens regressed threads, keeps the description', async () => {
+    commenter.isRerun.mockReturnValue(true);
+    commenter.reopenRegressedThreads.mockResolvedValue(1);
+    inlineReviewer.postReview.mockResolvedValue(1);
+    (gatherAllContext as jest.Mock).mockResolvedValue(makeContext());
+
+    const config = makeConfig({ ...baseConfig(), postInlineComments: true });
+    await expect(runReview(config)).resolves.toBeUndefined();
+
+    // Only the critical and high findings reach the inline reviewer — the
+    // medium one stays summary-only on a re-run.
+    const inlined = inlineReviewer.postReview.mock.calls[0][0] as Array<{ severity: string }>;
+    expect(inlined.map(f => f.severity).sort()).toEqual(['critical', 'high']);
+
+    // Regressed critical/high findings were offered for thread reopening.
+    expect(commenter.reopenRegressedThreads).toHaveBeenCalledTimes(1);
+    expect(output('threads_reopened')).toBe(1);
+
+    // The description updater was told this is a re-run (it keeps the old body).
+    expect((appendToPRDescription as jest.Mock).mock.calls[0][5]).toBe(true);
+
+    // Summary totals still count ALL severities, and the completion marker +
+    // re-run note are embedded for the next run.
+    expect(output('total_findings')).toBe(3);
+    const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
+    const finalPost = posted[posted.length - 1];
+    expect(finalPost).toContain('<!-- ai-pr-review-complete -->');
+    expect(finalPost).toContain('Re-run focus');
+  });
+
+  it('first run: inlines critical/high/medium and never calls the reopen path', async () => {
+    commenter.isRerun.mockReturnValue(false);
+    inlineReviewer.postReview.mockResolvedValue(3);
+    (gatherAllContext as jest.Mock).mockResolvedValue(makeContext());
+
+    const config = makeConfig({ ...baseConfig(), postInlineComments: true });
+    await expect(runReview(config)).resolves.toBeUndefined();
+
+    const inlined = inlineReviewer.postReview.mock.calls[0][0] as Array<{ severity: string }>;
+    expect(inlined.map(f => f.severity).sort()).toEqual(['critical', 'high', 'medium']);
+    expect(commenter.reopenRegressedThreads).not.toHaveBeenCalled();
+    expect((appendToPRDescription as jest.Mock).mock.calls[0][5]).toBe(false);
+    // Completion marker still embedded so the NEXT run detects a re-run.
+    const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(posted[posted.length - 1]).toContain('<!-- ai-pr-review-complete -->');
+    expect(posted[posted.length - 1]).not.toContain('Re-run focus');
   });
 
   it('skips gracefully when the AI pre-flight fails', async () => {

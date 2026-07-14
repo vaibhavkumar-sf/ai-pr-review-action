@@ -220,6 +220,13 @@ export const INPUTS: readonly InputSpec[] = [
     description: 'Verify human replies on previous review threads against the code, post a justification reply in each, and resolve the thread when the reply is valid',
   },
   {
+    name: 'enable_rerun_focus',
+    type: 'boolean',
+    default: 'true',
+    group: 'Behavior Flags',
+    description: 'On re-runs (a completed AI review already exists on this PR): limit NEW inline comments to critical/high findings, reopen resolved threads whose critical/high issue reappeared, and keep the existing PR description/diagrams. Summary totals still count all severities. Disable to restore full first-run behavior on every run',
+  },
+  {
     name: 'enable_bot_comment_cleanup',
     type: 'boolean',
     default: 'true',

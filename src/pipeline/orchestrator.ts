@@ -5,7 +5,7 @@ import { gatherAllContext } from '../context';
 import { AIProvider } from '../providers/ai-provider';
 import { createAIProvider } from '../providers/provider-factory';
 import { BaseAgent, createAgents } from '../agents';
-import { PRCommenter } from '../github/pr-commenter';
+import { PRCommenter, REVIEW_COMPLETE_MARKER } from '../github/pr-commenter';
 import { startPrStateWatcher } from '../github/pr-state-watcher';
 import { InlineReviewer } from '../github/inline-reviewer';
 import { ReplyHandler } from '../github/reply-handler';
@@ -16,7 +16,7 @@ import { appendToPRDescription } from './description-updater';
 import { runPhase } from './phase';
 import { isTestFile } from '../config/patterns';
 import { ERROR_SNIPPET_CHARS } from '../config/limits';
-import { INLINE_SEVERITIES } from '../config/taxonomy';
+import { inlineSeveritiesFor, RERUN_INLINE_SEVERITIES } from '../config/taxonomy';
 import { logger, writeJobSummary } from '../utils/logger';
 import { formatDuration } from '../utils/text';
 
@@ -195,8 +195,24 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
       `${merged.mediumCount} medium, ${merged.lowCount} low, ${merged.nitCount} nit)`,
   );
 
+  // ── Re-run focus ───────────────────────────────────────────────────────────
+  // A completed review already exists on this PR (detected via the completion
+  // marker when old summaries were minimized at startup): keep the summary
+  // exhaustive, but limit NEW inline comments to critical/high, reopen resolved
+  // threads whose critical/high issue reappeared, and skip regenerating the PR
+  // description/diagrams — this breaks the fix→push→new-nitpicks loop.
+  const isRerun = config.enableRerunFocus && commenter.isRerun();
+  if (isRerun) {
+    logger.info('Re-run detected: new inline comments limited to critical/high; PR description/diagrams preserved');
+  }
+
   // ── Phase 6: summary comment (critical — the review's main deliverable) ───
-  const finalComment = formatReviewComment(merged, config, context);
+  // The completion marker makes the NEXT run detect this one as a prior
+  // completed review; the note tells developers why mediums aren't inline.
+  const rerunNote = isRerun
+    ? '\n\n<sub>🔁 Re-run focus: new inline comments are limited to critical/high findings; the totals above include all severities.</sub>'
+    : '';
+  const finalComment = formatReviewComment(merged, config, context) + rerunNote + `\n${REVIEW_COMPLETE_MARKER}`;
   const { commentId, commentUrl } = await runPhase('Summary comment', { critical: true }, async () => {
     const posted = await commenter.postOrUpdateComment(finalComment);
     logger.info('Posted final review comment');
@@ -216,13 +232,15 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
 
   // ── Phase 8: stale-thread resolution + inline comments (best-effort) ──────
   const inline = await runPhase('Inline comments', { critical: false }, () =>
-    postInlineComments(octokit, config, context, consolidated, merged, commenter),
-  { staleThreadsResolved: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 });
+    postInlineComments(octokit, config, context, consolidated, merged, commenter, isRerun),
+  { staleThreadsResolved: 0, threadsReopened: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 });
+  core.setOutput('threads_reopened', inline.threadsReopened);
 
   const activity: RunActivityStats = {
     inlineCommentsNew: inline.inlineCommentsNew,
     inlineCommentsExisting: inline.inlineCommentsExisting,
     staleThreadsResolved: inline.staleThreadsResolved,
+    threadsReopened: inline.threadsReopened,
     repliesPosted: replyResult.repliesPosted,
     threadsResolvedFromReplies: replyResult.threadsResolved,
     botCommentsHidden,
@@ -236,8 +254,7 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
 
   // ── Phase 10: PR description + diagrams (best-effort) ─────────────────────
   await runPhase('PR description', { critical: false }, async () => {
-    await appendToPRDescription(octokit, config, merged, context, provider);
-    logger.info('Updated PR description with AI summary');
+    await appendToPRDescription(octokit, config, merged, context, provider, isRerun);
     return undefined;
   }, undefined);
 
@@ -365,7 +382,10 @@ async function consolidateResults(
   return { merged: mergeResults(consolidatedResults, config), consolidated };
 }
 
-/** Resolves stale threads from previous runs, then posts new inline comments. */
+/**
+ * Resolves stale threads from previous runs, reopens resolved threads whose
+ * critical/high issue reappeared (re-runs only), then posts new inline comments.
+ */
 async function postInlineComments(
   octokit: Octokit,
   config: ActionConfig,
@@ -373,14 +393,28 @@ async function postInlineComments(
   consolidated: Finding[],
   merged: MergedReviewResult,
   commenter: PRCommenter,
-): Promise<{ staleThreadsResolved: number; inlineCommentsNew: number; inlineCommentsExisting: number }> {
+  isRerun: boolean,
+): Promise<{ staleThreadsResolved: number; threadsReopened: number; inlineCommentsNew: number; inlineCommentsExisting: number }> {
   if (!config.postInlineComments) {
-    return { staleThreadsResolved: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 };
+    return { staleThreadsResolved: 0, threadsReopened: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 };
   }
 
-  // Resolve old inline comments that are no longer relevant
+  // Resolve old inline comments that are no longer relevant. ALL severities
+  // are passed, so a fixed medium/low still gets its thread resolved even
+  // though re-runs never post new medium/low comments.
   const currentFindingSummary = consolidated.map(f => ({ file: f.file, line: f.line, title: f.title }));
   const staleThreadsResolved = await commenter.resolveStaleInlineComments(currentFindingSummary);
+
+  // Re-run only: a resolved thread whose critical/high issue is STILL found
+  // gets unresolved with an explanation reply. After stale resolution, so a
+  // freshly-reopened thread can't be swallowed by the duplicate-location pass.
+  let threadsReopened = 0;
+  if (isRerun) {
+    const regressed = consolidated
+      .filter(f => RERUN_INLINE_SEVERITIES.has(f.severity) && !isTestFile(f.file))
+      .map(f => ({ file: f.file, line: f.line, title: f.title, severity: f.severity, description: f.description }));
+    threadsReopened = await commenter.reopenRegressedThreads(regressed);
+  }
 
   let inlineCommentsNew = 0;
   let inlineCommentsExisting = 0;
@@ -388,11 +422,12 @@ async function postInlineComments(
     const parsedDiffs = parseDiff(context.diff);
     const inlineReviewer = new InlineReviewer(octokit, config.owner, config.repo, config.prNumber);
 
-    // Inline comments cover critical/high/medium and never go on unit test
-    // files (findings remain in the summary comment) — mirrors the
-    // prompt-level suppression as a hard guard.
+    // Inline comments cover critical/high/medium on first runs and only
+    // critical/high on re-runs; never on unit test files (findings remain in
+    // the summary comment) — mirrors the prompt-level suppression as a guard.
+    const severities = inlineSeveritiesFor(isRerun);
     const inlineFindings = consolidated.filter(
-      f => INLINE_SEVERITIES.has(f.severity) && !isTestFile(f.file),
+      f => severities.has(f.severity) && !isTestFile(f.file),
     );
 
     if (inlineFindings.length > 0) {
@@ -402,7 +437,7 @@ async function postInlineComments(
     }
   }
 
-  return { staleThreadsResolved, inlineCommentsNew, inlineCommentsExisting };
+  return { staleThreadsResolved, threadsReopened, inlineCommentsNew, inlineCommentsExisting };
 }
 
 /** The markdown panel shown on the workflow run page. */

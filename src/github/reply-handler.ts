@@ -4,7 +4,7 @@ import { ActionConfig, ReviewContext } from '../types';
 import { AIProvider } from '../providers/ai-provider';
 import { PRCommenter } from './pr-commenter';
 import { INLINE_COMMENT_MARKER } from './inline-reviewer';
-import { fetchReviewThreads, makeLoginMatchers, ReviewThread, ThreadComment } from './threads';
+import { fetchReviewThreads, makeLoginMatchers, RESOLUTION_FOOTER, ReviewThread, ThreadComment } from './threads';
 import { extractJsonObject } from '../utils/json';
 import { addLineNumbers } from '../utils/text';
 import { loadPrompt } from '../prompts/loader';
@@ -103,7 +103,7 @@ export class ReplyHandler {
     if (first.databaseId) {
       const shouldResolve = verdict.user_is_correct || verdict.issue_resolved;
       const footer = shouldResolve
-        ? '\n\n_Resolving this thread._'
+        ? `\n\n${RESOLUTION_FOOTER}`
         : '';
       await this.octokit.pulls.createReplyForReviewComment({
         owner: this.config.owner,

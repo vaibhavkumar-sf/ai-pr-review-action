@@ -27,6 +27,7 @@ export interface RunActivityStats {
   inlineCommentsNew: number;
   inlineCommentsExisting: number;
   staleThreadsResolved: number;
+  threadsReopened: number;
   repliesPosted: number;
   threadsResolvedFromReplies: number;
   botCommentsHidden: number;
@@ -80,6 +81,7 @@ export interface BackstageReviewPayload {
   inline_comments_new: number;
   inline_comments_existing: number;
   stale_threads_resolved: number;
+  threads_reopened: number;
   replies_posted: number;
   threads_resolved_from_replies: number;
   bot_comments_hidden: number;
@@ -159,6 +161,7 @@ export async function reportRunOutcome(
     inline_comments_new: 0,
     inline_comments_existing: 0,
     stale_threads_resolved: 0,
+    threads_reopened: 0,
     replies_posted: 0,
     threads_resolved_from_replies: 0,
     bot_comments_hidden: 0,
@@ -255,6 +258,7 @@ function buildPayload(
     inline_comments_new: activity.inlineCommentsNew,
     inline_comments_existing: activity.inlineCommentsExisting,
     stale_threads_resolved: activity.staleThreadsResolved,
+    threads_reopened: activity.threadsReopened,
     replies_posted: activity.repliesPosted,
     threads_resolved_from_replies: activity.threadsResolvedFromReplies,
     bot_comments_hidden: activity.botCommentsHidden,

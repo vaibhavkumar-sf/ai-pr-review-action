@@ -10,9 +10,10 @@ export const INLINE_COMMENT_MARKER = '<!-- ai-pr-review-inline -->';
 
 /**
  * Builds a fingerprint marker encoding file + title into a compact hash.
- * Used as the primary dedup key — independent of line numbers.
+ * Used as the primary dedup key — independent of line numbers. Also reused by
+ * the re-run reopen matcher to recognize a resolved thread's original finding.
  */
-function buildFingerprintMarker(file: string, title: string): string {
+export function buildFingerprintMarker(file: string, title: string): string {
   const normalized = `${file}::${title.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80)}`;
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {

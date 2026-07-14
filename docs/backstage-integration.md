@@ -72,6 +72,7 @@ One JSON object per review run. All keys are snake_case.
   "inline_comments_new": 4,
   "inline_comments_existing": 8,
   "stale_threads_resolved": 2,
+  "threads_reopened": 1,
   "replies_posted": 4,
   "threads_resolved_from_replies": 1,
   "bot_comments_hidden": 3,
@@ -105,6 +106,7 @@ Field notes:
 | `inline_comments_new` | int | Inline comments actually posted this run (genuinely new findings) |
 | `inline_comments_existing` | int | Inline-eligible findings that already had a comment from a previous run (carried over) |
 | `stale_threads_resolved` | int | Threads auto-resolved this run because the issue is fixed / no longer reported |
+| `threads_reopened` | int | Resolved threads unresolved this run because their critical/high issue was detected again (re-runs only) |
 | `replies_posted` | int | Justification replies posted in threads where a human had replied |
 | `threads_resolved_from_replies` | int | Threads resolved because the human's reply was verified as valid |
 | `bot_comments_hidden` | int | Noisy bot comments minimized during cleanup |
@@ -122,7 +124,7 @@ The payload is not sent when the review is skipped (`too_many_files` / `no_agent
 | Run | What the row shows |
 |-----|--------------------|
 | Run 1 (PR opened) | `total_findings: 10`, `inline_comments_new: 10`, everything else 0 |
-| Run 2 (re-push) | `stale_threads_resolved: 2` (fixed in code), `inline_comments_existing: 8` (still open), `inline_comments_new: 4` (new issues), `replies_posted: 4` (humans pushed back, all answered), `threads_resolved_from_replies: 1` |
+| Run 2 (re-push) | `stale_threads_resolved: 2` (fixed in code), `inline_comments_existing: 8` (still open), `inline_comments_new: 4` (new critical/high issues — re-runs never post new medium/low inline), `threads_reopened: 1` (a resolved critical came back), `replies_posted: 4` (humans pushed back, all answered), `threads_resolved_from_replies: 1` |
 | Run 3 (re-push) | ... and so on |
 
 Group rows by `repo_name` + `pr_number` (ordered by `run_timestamp`) to get "this PR was reviewed 3 times"; `head_sha` distinguishes the exact commit each run reviewed. The same metrics table is also posted on the PR itself (the "📊 Backstage Tracking Metrics" section of the summary comment), so reviewers see exactly what was recorded.
@@ -174,6 +176,7 @@ CREATE TABLE ai_code_reviews (
   inline_comments_new   INTEGER       NOT NULL DEFAULT 0,
   inline_comments_existing INTEGER    NOT NULL DEFAULT 0,
   stale_threads_resolved INTEGER      NOT NULL DEFAULT 0,
+  threads_reopened      INTEGER       NOT NULL DEFAULT 0,
   replies_posted        INTEGER       NOT NULL DEFAULT 0,
   threads_resolved_from_replies INTEGER NOT NULL DEFAULT 0,
   bot_comments_hidden   INTEGER       NOT NULL DEFAULT 0,

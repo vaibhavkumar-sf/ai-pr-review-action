@@ -36,6 +36,7 @@ describe('formatTrackingMetrics snapshot', () => {
       inlineCommentsNew: 3,
       inlineCommentsExisting: 1,
       staleThreadsResolved: 2,
+      threadsReopened: 1,
       repliesPosted: 1,
       threadsResolvedFromReplies: 1,
       botCommentsHidden: 4,

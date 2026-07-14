@@ -20,6 +20,11 @@ const AI_DESCRIPTION_SEPARATOR = '----AI-description----';
  * Uses the AI to generate a detailed PR description with Mermaid diagrams,
  * then appends it below the ----AI-description---- separator.
  * Everything above the separator (user's manual description) is preserved.
+ *
+ * Re-runs keep the first run's description and diagrams untouched (2 fewer AI
+ * calls per re-run; the PR's purpose rarely changes between fix-pushes) —
+ * unless no AI section exists yet (a first run whose description phase
+ * failed), in which case it is generated now.
  */
 export async function appendToPRDescription(
   octokit: Octokit,
@@ -27,6 +32,7 @@ export async function appendToPRDescription(
   merged: MergedReviewResult,
   context: ReviewContext,
   provider: AIProvider,
+  isRerun = false,
 ): Promise<void> {
   const { data: pr } = await octokit.pulls.get({
     owner: config.owner,
@@ -41,6 +47,11 @@ export async function appendToPRDescription(
   const userDescription = separatorIndex >= 0
     ? existingBody.substring(0, separatorIndex).trimEnd()
     : existingBody.trimEnd();
+
+  if (isRerun && separatorIndex >= 0) {
+    logger.info('Re-run: keeping existing PR description and diagrams');
+    return;
+  }
 
   // Generate AI description + Mermaid diagram via AI call
   let aiGeneratedContent = '';
@@ -149,6 +160,7 @@ export async function appendToPRDescription(
     pull_number: config.prNumber,
     body: newBody,
   });
+  logger.info('Updated PR description with AI summary');
 }
 
 function buildDescriptionUserPrompt(context: ReviewContext): string {

@@ -242,6 +242,20 @@ export const INLINE_NEARBY_SEARCH_RANGE = 3;
 /** A previous inline thread within this many lines of a current finding is still relevant. */
 export const STALE_THREAD_PROXIMITY = 3;
 
+/**
+ * A RESOLVED thread within this many lines of a recurring critical/high finding
+ * is the same issue and gets reopened. Tighter than STALE_THREAD_PROXIMITY on
+ * purpose — reopening the wrong thread is worse than missing a reopen (the
+ * finding still surfaces as a new inline comment when no thread matches).
+ */
+export const REOPEN_THREAD_PROXIMITY = 2;
+
+/**
+ * Safety valve: max threads unresolved per run, so consolidation churn or a
+ * fingerprint pathology can never mass-reopen a PR's resolved history.
+ */
+export const REOPEN_THREADS_MAX_PER_RUN = 10;
+
 // ─── GitHub & context gathering ─────────────────────────────────────────────
 
 /** Page size for GitHub REST/GraphQL list calls. */

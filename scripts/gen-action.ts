@@ -100,6 +100,8 @@ outputs:
     description: 'Number of justification replies posted on review threads that had human replies'
   threads_resolved_from_replies:
     description: 'Number of threads resolved because a human reply was verified as valid'
+  threads_reopened:
+    description: 'Number of resolved threads reopened because their critical/high issue was detected again on a re-run'
   bot_comments_hidden:
     description: 'Number of noisy bot comments minimized during cleanup'
 

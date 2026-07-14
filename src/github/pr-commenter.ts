@@ -1,13 +1,45 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
-import { ReviewCategory } from '../types';
-import { INLINE_COMMENT_MARKER } from './inline-reviewer';
-import { fetchReviewThreads, KNOWN_BOT_LOGINS, makeLoginMatchers, minimizeCommentById, resolveReviewThreadById } from './threads';
-import { AGENT_LABELS } from '../config/taxonomy';
+import { ReviewCategory, Severity } from '../types';
+import { buildFingerprintMarker, INLINE_COMMENT_MARKER } from './inline-reviewer';
+import {
+  fetchReviewThreads,
+  KNOWN_BOT_LOGINS,
+  makeLoginMatchers,
+  minimizeCommentById,
+  RESOLUTION_FOOTER,
+  resolveReviewThreadById,
+  unresolveReviewThreadById,
+} from './threads';
+import { AGENT_LABELS, SEVERITY_LABELS, SEVERITY_TAGS } from '../config/taxonomy';
 import { BOT_HIDE_ALL_PATTERNS } from '../config/patterns';
-import { GITHUB_PER_PAGE, STALE_THREAD_PROXIMITY } from '../config/limits';
+import {
+  GITHUB_PER_PAGE,
+  REOPEN_THREAD_PROXIMITY,
+  REOPEN_THREADS_MAX_PER_RUN,
+  STALE_THREAD_PROXIMITY,
+} from '../config/limits';
 
 const COMMENT_MARKER = '<!-- ai-pr-review-action-comment -->';
+
+/**
+ * Embedded only in the FINAL summary of a completed review — its presence on a
+ * PR is the re-run signal. Progress/error comments carry only COMMENT_MARKER,
+ * so a run that died mid-way never counts as a completed review.
+ */
+export const REVIEW_COMPLETE_MARKER = '<!-- ai-pr-review-complete -->';
+
+/** Marks the templated reply posted when a resolved thread is reopened. */
+export const REOPEN_MARKER = '<!-- ai-pr-review-reopen -->';
+
+/** A recurring critical/high finding that may reopen a resolved thread. */
+export interface RegressedFinding {
+  file: string;
+  line: number;
+  title: string;
+  severity: Severity;
+  description: string;
+}
 
 type AgentStatus = 'running' | 'done' | 'failed';
 
@@ -15,6 +47,7 @@ export class PRCommenter {
   private agentStatuses: Map<string, AgentStatus> = new Map();
   private currentCommentId: number | null = null;
   private authenticatedUser: string | null = null;
+  private priorCompletedRun = false;
 
   constructor(
     private octokit: Octokit,
@@ -54,6 +87,15 @@ export class PRCommenter {
 
     this.currentCommentId = created.data.id;
     return { commentId: created.data.id, commentUrl: created.data.html_url };
+  }
+
+  /**
+   * True once a prior COMPLETED review summary was seen on this PR.
+   * Latched by minimizeOldSummaryComments() on the first post of the run;
+   * false (first-run behavior) if that scan failed — fail-open by design.
+   */
+  isRerun(): boolean {
+    return this.priorCompletedRun;
   }
 
   async updateProgress(agentName: string, status: AgentStatus): Promise<void> {
@@ -174,6 +216,98 @@ export class PRCommenter {
       core.debug(`Failed to resolve thread: ${msg}`);
       return 0;
     }
+  }
+
+  /**
+   * Re-run only: previously-RESOLVED threads whose critical/high issue was
+   * found AGAIN are unresolved and get a templated explanation reply (no AI
+   * call). Never touches threads the reply handler resolved after accepting a
+   * human justification (RESOLUTION_FOOTER), threads where a human spoke last,
+   * or threads whose original severity was below high (proximity match only —
+   * a fingerprint match is the same finding regardless of its old tag).
+   *
+   * Callers pass findings already filtered to critical/high on non-test files.
+   */
+  async reopenRegressedThreads(regressedFindings: RegressedFinding[]): Promise<number> {
+    if (regressedFindings.length === 0) return 0;
+    const user = await this.getAuthenticatedUser();
+    if (!user) return 0;
+
+    let reopened = 0;
+
+    try {
+      const threads = await fetchReviewThreads(this.octokit, this.owner, this.repo, this.prNumber);
+      const { isOurLogin, isHuman } = makeLoginMatchers(user);
+
+      // Tags identifying a thread whose ORIGINAL finding was critical/high.
+      const severeTags = ['critical', 'high'].map(s => `**${SEVERITY_TAGS[s as Severity]}:**`);
+      const usedFindings = new Set<RegressedFinding>();
+
+      for (const thread of threads) {
+        if (reopened >= REOPEN_THREADS_MAX_PER_RUN) break;
+        if (!thread.isResolved) continue;
+        const firstComment = thread.comments.nodes[0];
+        if (!firstComment) continue;
+
+        const isOurs = firstComment.body.includes(INLINE_COMMENT_MARKER) ||
+          isOurLogin(firstComment.author?.login ?? '');
+        if (!isOurs) continue;
+
+        // The reply handler resolved this after accepting a human's
+        // justification — never undo that decision.
+        const justificationAccepted = thread.comments.nodes.some(
+          c => isOurLogin(c.author?.login ?? '') && c.body.includes(RESOLUTION_FOOTER),
+        );
+        if (justificationAccepted) continue;
+
+        // A human had the final word (e.g. self-resolved with a rationale) —
+        // reopening would fight them; same conservatism as stale resolution.
+        const lastComment = thread.comments.nodes[thread.comments.nodes.length - 1];
+        if (isHuman(lastComment?.author?.login ?? '')) continue;
+
+        const oldWasSevere = severeTags.some(tag => firstComment.body.includes(tag));
+
+        // Primary match: exact fingerprint (same file+title, line-independent).
+        // Secondary: tight location proximity, only when the old tag was severe
+        // (never reopen a medium/low/nit thread on a mere location match).
+        const match = regressedFindings.find(f =>
+          !usedFindings.has(f) && (
+            firstComment.body.includes(buildFingerprintMarker(f.file, f.title)) ||
+            (oldWasSevere &&
+              f.file === firstComment.path &&
+              Math.abs(f.line - (firstComment.line ?? 0)) <= REOPEN_THREAD_PROXIMITY)
+          ),
+        );
+        if (!match) continue;
+
+        try {
+          await unresolveReviewThreadById(this.octokit, thread.id);
+          if (firstComment.databaseId) {
+            await this.octokit.pulls.createReplyForReviewComment({
+              owner: this.owner,
+              repo: this.repo,
+              pull_number: this.prNumber,
+              comment_id: firstComment.databaseId,
+              body: buildReopenReply(match),
+            });
+          }
+          usedFindings.add(match);
+          reopened++;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          core.debug(`Failed to reopen thread: ${msg}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      core.warning(`Failed to reopen regressed threads: ${msg}`);
+    }
+
+    if (reopened > 0) {
+      core.info(`Reopened ${reopened} resolved thread(s) whose critical/high issue was detected again`);
+    }
+
+    return reopened;
   }
 
   /**
@@ -311,6 +445,13 @@ export class PRCommenter {
         // Only minimize our own comments
         if (user && comment.user?.login !== user) continue;
 
+        // A completed review summary from an earlier run ⇒ this run is a re-run.
+        // Minimized comments still appear in REST listComments (minimization is
+        // a display state), so the signal survives run after run.
+        if (comment.body.includes(REVIEW_COMPLETE_MARKER)) {
+          this.priorCompletedRun = true;
+        }
+
         try {
           await minimizeCommentById(this.octokit, comment.node_id);
           core.debug(`Minimized old summary comment ${comment.id}`);
@@ -336,6 +477,24 @@ export class PRCommenter {
       return 'github-actions[bot]';
     }
   }
+}
+
+/**
+ * Templated reply for a reopened thread — explains why the finding matters
+ * using its own description. Deliberately NOT an AI call: re-runs must stay
+ * cheap, and the original finding already carries the reasoning.
+ */
+function buildReopenReply(finding: RegressedFinding): string {
+  return [
+    REOPEN_MARKER,
+    `**${SEVERITY_TAGS[finding.severity]} — issue detected again**`,
+    '',
+    'This thread was resolved earlier, but the latest review still finds the issue:',
+    '',
+    finding.description,
+    '',
+    `_Reopened automatically: ${SEVERITY_LABELS[finding.severity].toLowerCase()}-severity findings stay open until fixed, or justified with a reply._`,
+  ].join('\n');
 }
 
 function formatStatus(status: AgentStatus): string {
