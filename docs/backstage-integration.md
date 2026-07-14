@@ -77,6 +77,11 @@ One JSON object per review run. All keys are snake_case.
   "threads_resolved_from_replies": 1,
   "bot_comments_hidden": 3,
 
+  "ai_calls": 7,
+  "input_tokens": 245120,
+  "output_tokens": 38440,
+  "estimated_cost_usd": 0.2317,
+
   "findings": [
     {
       "category": "security",
@@ -110,6 +115,9 @@ Field notes:
 | `replies_posted` | int | Justification replies posted in threads where a human had replied |
 | `threads_resolved_from_replies` | int | Threads resolved because the human's reply was verified as valid |
 | `bot_comments_hidden` | int | Noisy bot comments minimized during cleanup |
+| `ai_calls` | int | AI chat calls made this run (agents, consolidation, replies, description, diagrams) |
+| `input_tokens` / `output_tokens` | int | Total tokens across all AI calls (output includes thinking) |
+| `estimated_cost_usd` | float \| null | Client-side estimate: token counts × the `model_pricing` input (USD per 1M tokens). `null` when `model_pricing` is unset; partial if some used models are unpriced. Never billing data |
 | `findings[].category` | string | `security`, `code-quality`, `performance`, `type-safety`, `architecture`, `testing`, `api-design` |
 | `findings[].severity` | string | `critical`, `high`, `medium`, `low`, `nit` |
 | `findings[].suggestion` | string \| null | Free-text fix guidance |
@@ -180,6 +188,10 @@ CREATE TABLE ai_code_reviews (
   replies_posted        INTEGER       NOT NULL DEFAULT 0,
   threads_resolved_from_replies INTEGER NOT NULL DEFAULT 0,
   bot_comments_hidden   INTEGER       NOT NULL DEFAULT 0,
+  ai_calls              INTEGER       NOT NULL DEFAULT 0,
+  input_tokens          BIGINT        NOT NULL DEFAULT 0,
+  output_tokens         BIGINT        NOT NULL DEFAULT 0,
+  estimated_cost_usd    NUMERIC(12,6),
   run_timestamp         TIMESTAMPTZ   NOT NULL,
   created_at            TIMESTAMPTZ   NOT NULL DEFAULT now()
 );

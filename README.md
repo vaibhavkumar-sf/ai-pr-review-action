@@ -85,6 +85,8 @@ The action speaks two API dialects, selected with the `ai_provider` input, so it
 
 The `anthropic_base_url`, `anthropic_auth_token`, and `anthropic_model` inputs apply to **whichever dialect is selected** (the names are kept for backward compatibility). `anthropic_model` may be a comma-separated fallback chain — the first model that the endpoint accepts is used for the rest of the run.
 
+**Cost tracking:** every run reports its AI usage (calls, input/output tokens) in the summary comment's tracking metrics, the `ai_calls`/`input_tokens`/`output_tokens`/`estimated_cost_usd` action outputs, and the Backstage payload. To get a USD estimate, set `model_pricing` with your endpoint's prices in USD per **million** tokens, e.g. `model_pricing: 'glm-5.2=0.6/2.2'` (`model=input/output` pairs, comma-separated). The figure is a client-side estimate computed from token counts — the same approach the Claude Agent SDK uses for `total_cost_usd` — never billing data.
+
 ```yaml
 # Default (Anthropic dialect) — nothing extra needed
 with:

@@ -13,6 +13,7 @@ export function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig 
     anthropicAuthToken: 'test-token',
     anthropicBaseUrl: 'https://api.example.test',
     anthropicModel: 'glm-5.2',
+    modelPricing: '',
     maxTokens: 0, // auto — the model's full native output capacity
     thinkingBudget: 4096,
     contextWindow: 1000000,

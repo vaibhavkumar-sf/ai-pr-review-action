@@ -12,6 +12,7 @@ import { ReplyHandler } from '../github/reply-handler';
 import { parseDiff } from '../github/diff-parser';
 import { consolidateFindings, deduplicateFindings, formatReviewComment, formatTrackingMetrics, mergeResults } from '../results';
 import { reportRunOutcome, reportToBackstage, RunActivityStats } from '../results/backstage-reporter';
+import { estimateCost, parseModelPricing } from '../results/cost';
 import { appendToPRDescription } from './description-updater';
 import { runPhase } from './phase';
 import { isTestFile } from '../config/patterns';
@@ -236,6 +237,21 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
   { staleThreadsResolved: 0, threadsReopened: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 });
   core.setOutput('threads_reopened', inline.threadsReopened);
 
+  // ── Phase 9: PR description + diagrams (best-effort) ──────────────────────
+  // Runs BEFORE the tracking metrics so the AI usage/cost figures below
+  // include the description + diagram calls.
+  await runPhase('PR description', { critical: false }, async () => {
+    await appendToPRDescription(octokit, config, merged, context, provider, isRerun);
+    return undefined;
+  }, undefined);
+
+  // All AI calls are done — total the run's usage and price it (client-side
+  // estimate; USD covers only the models listed in model_pricing).
+  const usageCost = estimateCost(provider.getModelUsage(), parseModelPricing(config.modelPricing));
+  if (usageCost.estimatedCostUsd !== null && usageCost.unpricedModels.length > 0) {
+    core.warning(`Cost estimate is partial — no model_pricing entry for: ${usageCost.unpricedModels.join(', ')}`);
+  }
+
   const activity: RunActivityStats = {
     inlineCommentsNew: inline.inlineCommentsNew,
     inlineCommentsExisting: inline.inlineCommentsExisting,
@@ -244,17 +260,15 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
     repliesPosted: replyResult.repliesPosted,
     threadsResolvedFromReplies: replyResult.threadsResolved,
     botCommentsHidden,
+    aiCalls: usageCost.totalCalls,
+    aiInputTokens: usageCost.totalInputTokens,
+    aiOutputTokens: usageCost.totalOutputTokens,
+    estimatedCostUsd: usageCost.estimatedCostUsd,
   };
 
-  // ── Phase 9: tracking metrics appended to the summary (best-effort) ───────
+  // ── Phase 10: tracking metrics appended to the summary (best-effort) ──────
   await runPhase('Tracking metrics', { critical: false }, async () => {
     await commenter.postOrUpdateComment(finalComment + formatTrackingMetrics(merged, config, activity));
-    return undefined;
-  }, undefined);
-
-  // ── Phase 10: PR description + diagrams (best-effort) ─────────────────────
-  await runPhase('PR description', { critical: false }, async () => {
-    await appendToPRDescription(octokit, config, merged, context, provider, isRerun);
     return undefined;
   }, undefined);
 
@@ -270,6 +284,10 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
   core.setOutput('duration_seconds', Math.round(merged.durationMs / 1000));
   core.setOutput('agents_run', agents.map(a => a.name).join(','));
   core.setOutput('agents_failed', agentResults.filter(r => r.error).map(r => r.agentName).join(','));
+  core.setOutput('ai_calls', usageCost.totalCalls);
+  core.setOutput('input_tokens', usageCost.totalInputTokens);
+  core.setOutput('output_tokens', usageCost.totalOutputTokens);
+  core.setOutput('estimated_cost_usd', usageCost.estimatedCostUsd === null ? '' : usageCost.estimatedCostUsd.toFixed(6));
 
   // ── Phase 11: Backstage telemetry (best-effort, fire-and-forget) ──────────
   if (config.postDataUrl) {

@@ -301,6 +301,22 @@ describe('BaseProvider engine', () => {
     expect(probed).toEqual(['down', 'up']);
   });
 
+  it('accumulates per-model token usage across calls (failed attempts excluded)', async () => {
+    let n = 0;
+    const provider = new FakeProvider(['flaky', 'solid'], 0, 0, async ({ model }) => {
+      n += 1;
+      if (model === 'flaky') throw new Error('RETRYABLE: 529');
+      return { ...OK, inputTokens: 100 * n, outputTokens: 10 * n };
+    });
+
+    await provider.chat(MESSAGES, OPTS); // flaky fails → solid answers (call 2)
+    await provider.chat(MESSAGES, OPTS); // solid answers (call 3)
+
+    expect(provider.getModelUsage()).toEqual([
+      { model: 'solid', calls: 2, inputTokens: 200 + 300, outputTokens: 20 + 30 },
+    ]);
+  });
+
   it('clamps the sent output budget to the assumed ceiling', async () => {
     const seen: number[] = [];
     const provider = new FakeProvider(['good'], 0, 0, async ({ options }) => {

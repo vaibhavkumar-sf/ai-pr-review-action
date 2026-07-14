@@ -240,6 +240,22 @@ export function formatTrackingMetrics(
   ]));
   parts.push('');
 
+  // Group 4: AI usage for THIS run; USD appears only when model_pricing priced
+  // the models used (client-side estimate, never billing data).
+  parts.push('#### AI Usage (this run)');
+  parts.push('');
+  parts.push(...horizontalTable([
+    ['🧠 AI calls', activity.aiCalls],
+    ['📥 Input tokens', activity.aiInputTokens.toLocaleString('en-US')],
+    ['📤 Output tokens', activity.aiOutputTokens.toLocaleString('en-US')],
+    ['💰 Est. cost', activity.estimatedCostUsd === null ? 'n/a' : `$${activity.estimatedCostUsd.toFixed(4)}`],
+  ]));
+  parts.push('');
+  if (activity.estimatedCostUsd !== null) {
+    parts.push('<sub>Cost is estimated client-side from token counts × the configured `model_pricing` — not billing data.</sub>');
+    parts.push('');
+  }
+
   if (config.postDataUrl) {
     parts.push('<sub>Reported to the Backstage tracker — each review run is stored as a separate row, so re-reviews of this PR are tracked individually.</sub>');
     parts.push('');

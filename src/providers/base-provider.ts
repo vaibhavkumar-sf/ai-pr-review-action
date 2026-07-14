@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResult, ToolCall, ToolDefinition } from './ai-provider';
+import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResult, ModelUsage, ToolCall, ToolDefinition } from './ai-provider';
 import {
   CHARS_PER_TOKEN,
   HEARTBEAT_INTERVAL_MS,
@@ -119,6 +119,9 @@ export abstract class BaseProvider implements AIProvider {
   // Output-token caps discovered from endpoint rejections ("max_tokens: X >
   // <max> ..."), latched per model so later calls are clamped up front.
   private outputCapByModel = new Map<string, number>();
+  // Cumulative token usage per model across every successful chat call —
+  // the basis for the run's usage/cost report.
+  private usageByModel = new Map<string, { calls: number; inputTokens: number; outputTokens: number }>();
 
   constructor(baseUrl: string, apiKey: string, models: string[], maxRetries: number, thinkingBudget: number) {
     this.models = models.length ? models : [];
@@ -167,6 +170,13 @@ export abstract class BaseProvider implements AIProvider {
   /** The model already confirmed to work, or the first candidate if none tried yet. */
   getResolvedModel(): string {
     return this.resolvedModel ?? this.models[0];
+  }
+
+  /** Per-model token usage accumulated across every successful chat call. */
+  getModelUsage(): ModelUsage[] {
+    return [...this.usageByModel.entries()]
+      .map(([model, u]) => ({ model, ...u }))
+      .sort((a, b) => b.calls - a.calls);
   }
 
   /**
@@ -561,6 +571,12 @@ export abstract class BaseProvider implements AIProvider {
           + `stop_reason=${response.stopReason ?? 'n/a'}`
           + `${response.toolCalls?.length ? `, tool_calls=${response.toolCalls.length}` : ''})`,
         );
+
+        const usage = this.usageByModel.get(model) ?? { calls: 0, inputTokens: 0, outputTokens: 0 };
+        usage.calls += 1;
+        usage.inputTokens += response.inputTokens;
+        usage.outputTokens += response.outputTokens;
+        this.usageByModel.set(model, usage);
 
         // Thinking-starvation diagnostic: the call "succeeded" but every output
         // token went to thinking and none to findings text (endpoints like GLM

@@ -32,6 +32,10 @@ inputs:
     description: 'Model id, or a comma-separated fallback chain tried in order (the next is used when a model is rejected as unknown or exhausts its retries on a capacity/transient failure)'
     required: false
     default: 'glm-5.2'
+  model_pricing:
+    description: 'Optional per-model prices in USD per MILLION tokens, comma-separated model=input/output pairs (e.g. "glm-5.2=0.6/2.2,glm-5.2[1m]=1/3"). When set, the summary comment, action outputs and Backstage payload include an estimated run cost. Client-side estimate from token counts — not billing data'
+    required: false
+    default: ''
   max_tokens:
     description: '0 (default) = auto: use the model''s full native output capacity (e.g. 131072 on GLM-5.2) so a review is never truncated by a self-imposed cap; if an endpoint advertises a smaller maximum in its rejection, it is discovered and latched automatically. Set a positive number to cap output tokens manually'
     required: false
@@ -250,6 +254,14 @@ outputs:
     description: 'Number of resolved threads reopened because their critical/high issue was detected again on a re-run'
   bot_comments_hidden:
     description: 'Number of noisy bot comments minimized during cleanup'
+  ai_calls:
+    description: 'Number of AI chat calls made during the run (agents, consolidation, replies, description, diagrams)'
+  input_tokens:
+    description: 'Total input tokens consumed across all AI calls this run'
+  output_tokens:
+    description: 'Total output tokens (including thinking) across all AI calls this run'
+  estimated_cost_usd:
+    description: 'Estimated run cost in USD from token counts x model_pricing (client-side estimate, not billing data; empty when model_pricing is unset)'
 
 runs:
   using: 'docker'
@@ -261,6 +273,7 @@ runs:
     INPUT_AI_PROVIDER: ${{ inputs.ai_provider }}
     INPUT_ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
     INPUT_ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
+    INPUT_MODEL_PRICING: ${{ inputs.model_pricing }}
     INPUT_MAX_TOKENS: ${{ inputs.max_tokens }}
     INPUT_THINKING_BUDGET: ${{ inputs.thinking_budget }}
     INPUT_CONTEXT_WINDOW: ${{ inputs.context_window }}

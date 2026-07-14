@@ -75,6 +75,13 @@ export const INPUTS: readonly InputSpec[] = [
     description: 'Model id, or a comma-separated fallback chain tried in order (the next is used when a model is rejected as unknown or exhausts its retries on a capacity/transient failure)',
   },
   {
+    name: 'model_pricing',
+    type: 'string',
+    default: '',
+    group: 'Provider Configuration',
+    description: 'Optional per-model prices in USD per MILLION tokens, comma-separated model=input/output pairs (e.g. "glm-5.2=0.6/2.2,glm-5.2[1m]=1/3"). When set, the summary comment, action outputs and Backstage payload include an estimated run cost. Client-side estimate from token counts — not billing data',
+  },
+  {
     name: 'max_tokens',
     type: 'number',
     default: '0',

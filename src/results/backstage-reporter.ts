@@ -31,6 +31,13 @@ export interface RunActivityStats {
   repliesPosted: number;
   threadsResolvedFromReplies: number;
   botCommentsHidden: number;
+  // AI usage across the whole run (all chat calls: agents, consolidation,
+  // replies, description, diagrams) and its client-side cost estimate.
+  aiCalls: number;
+  aiInputTokens: number;
+  aiOutputTokens: number;
+  // null when no used model has a model_pricing entry.
+  estimatedCostUsd: number | null;
 }
 
 export interface BackstageReviewPayload {
@@ -85,6 +92,12 @@ export interface BackstageReviewPayload {
   replies_posted: number;
   threads_resolved_from_replies: number;
   bot_comments_hidden: number;
+
+  // AI usage + client-side cost estimate (null when model_pricing is unset)
+  ai_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number | null;
 
   // Full per-finding detail
   findings: BackstageFinding[];
@@ -165,6 +178,10 @@ export async function reportRunOutcome(
     replies_posted: 0,
     threads_resolved_from_replies: 0,
     bot_comments_hidden: 0,
+    ai_calls: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    estimated_cost_usd: null,
     findings: [],
   };
   return postPayload(config, payload, `status=${status} (${reason})`);
@@ -262,6 +279,10 @@ function buildPayload(
     replies_posted: activity.repliesPosted,
     threads_resolved_from_replies: activity.threadsResolvedFromReplies,
     bot_comments_hidden: activity.botCommentsHidden,
+    ai_calls: activity.aiCalls,
+    input_tokens: activity.aiInputTokens,
+    output_tokens: activity.aiOutputTokens,
+    estimated_cost_usd: activity.estimatedCostUsd,
 
     findings: merged.findings.map(toBackstageFinding),
   };

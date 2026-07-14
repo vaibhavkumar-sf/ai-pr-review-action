@@ -186,6 +186,14 @@ exports[`formatTrackingMetrics snapshot renders the tracking metrics section 1`]
 |:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | 3 | 1 | 2 | 1 | 1 | 1 | 4 |
 
+#### AI Usage (this run)
+
+| 🧠 AI calls | 📥 Input tokens | 📤 Output tokens | 💰 Est. cost |
+|:-:|:-:|:-:|:-:|
+| 7 | 245,120 | 38,440 | $0.2317 |
+
+<sub>Cost is estimated client-side from token counts × the configured \`model_pricing\` — not billing data.</sub>
+
 <sub>Reported to the Backstage tracker — each review run is stored as a separate row, so re-reviews of this PR are tracked individually.</sub>
 "
 `;

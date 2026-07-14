@@ -59,6 +59,15 @@ export interface ChatResponse {
   toolCalls?: ToolCall[];
 }
 
+/** Cumulative AI usage for one model across the whole run (chat calls only;
+ *  the tiny pre-flight probes are excluded). */
+export interface ModelUsage {
+  model: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 /** Result of a successful pre-flight connectivity check. */
 export interface ConnectionCheckResult {
   /** The model that answered (also latched as the resolved model). */
@@ -96,4 +105,6 @@ export interface AIProvider {
   verifyConnection(timeoutMs?: number): Promise<ConnectionCheckResult>;
   /** The model actually used after fallback resolution (for reporting). */
   getResolvedModel(): string;
+  /** Per-model token usage accumulated across every chat call this run. */
+  getModelUsage(): ModelUsage[];
 }

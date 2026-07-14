@@ -43,6 +43,7 @@ jest.mock('../../src/providers/provider-factory', () => {
     logDiagnostics: jest.fn().mockResolvedValue(undefined),
     verifyConnection: jest.fn().mockResolvedValue({ model: 'glm-5.2', latencyMs: 100, outputTokens: 5 }),
     getResolvedModel: jest.fn(() => 'glm-5.2'),
+    getModelUsage: jest.fn(() => [{ model: 'glm-5.2', calls: 2, inputTokens: 1000, outputTokens: 200 }]),
     chat: jest.fn().mockResolvedValue({ content: '{}', inputTokens: 1, outputTokens: 1 }),
   };
   return { createAIProvider: jest.fn(() => provider), __provider: provider };
