@@ -101,6 +101,21 @@ export class AnthropicProvider extends BaseProvider {
     });
     stream.on('error', () => { /* delivered via finalMessage() rejection */ });
 
+    // The SDK's snapshot accumulator copies ONLY output_tokens from
+    // message_delta usage; input_tokens comes solely from message_start. Some
+    // compatible endpoints (z.ai GLM) report input_tokens only in the final
+    // message_delta, so finalMessage() would show 0 input tokens — track the
+    // max input_tokens seen across raw events instead.
+    let inputTokensSeen = 0;
+    stream.on('streamEvent', (event: Anthropic.MessageStreamEvent) => {
+      const usage =
+        event.type === 'message_start' ? event.message.usage
+        : event.type === 'message_delta' ? event.usage
+        : undefined;
+      const input = (usage as { input_tokens?: number } | undefined)?.input_tokens;
+      if (typeof input === 'number' && input > inputTokensSeen) inputTokensSeen = input;
+    });
+
     const response = await stream.finalMessage();
 
     // Extract text content (skip thinking blocks)
@@ -120,7 +135,7 @@ export class AnthropicProvider extends BaseProvider {
 
     return {
       content,
-      inputTokens: response.usage.input_tokens,
+      inputTokens: Math.max(response.usage.input_tokens ?? 0, inputTokensSeen),
       outputTokens: response.usage.output_tokens,
       stopReason: response.stop_reason,
       ...(toolCalls.length ? { toolCalls } : {}),
