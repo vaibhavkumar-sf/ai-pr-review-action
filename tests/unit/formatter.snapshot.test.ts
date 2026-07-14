@@ -13,6 +13,16 @@ describe('formatReviewComment snapshot', () => {
     expect(comment).toMatchSnapshot();
   });
 
+  it('suffixes the header with "— Re-run #N" when rerunNumber > 0', () => {
+    const merged = makeMerged();
+    const firstRun = formatReviewComment(merged, makeConfig(), makeContext(), 0);
+    const firstRerun = formatReviewComment(merged, makeConfig(), makeContext(), 1);
+    const secondRerun = formatReviewComment(merged, makeConfig(), makeContext(), 2);
+    expect(firstRun.split('\n')[0]).not.toMatch(/Re-run/);
+    expect(firstRerun.split('\n')[0]).toMatch(/AI Code Review — Re-run #1$/);
+    expect(secondRerun.split('\n')[0]).toMatch(/AI Code Review — Re-run #2$/);
+  });
+
   it('renders a passing zero-findings comment in separate mode', () => {
     const merged = makeMerged({
       findings: [],

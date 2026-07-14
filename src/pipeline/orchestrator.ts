@@ -213,7 +213,8 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
   const rerunNote = isRerun
     ? '\n\n<sub>🔁 Re-run focus: new inline comments are limited to critical/high findings; the totals above include all severities.</sub>'
     : '';
-  const finalComment = formatReviewComment(merged, config, context) + rerunNote + `\n${REVIEW_COMPLETE_MARKER}`;
+  const rerunNumber = isRerun ? commenter.rerunNumber() : 0;
+  const finalComment = formatReviewComment(merged, config, context, rerunNumber) + rerunNote + `\n${REVIEW_COMPLETE_MARKER}`;
   const { commentId, commentUrl } = await runPhase('Summary comment', { critical: true }, async () => {
     const posted = await commenter.postOrUpdateComment(finalComment);
     logger.info('Posted final review comment');

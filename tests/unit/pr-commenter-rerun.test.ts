@@ -135,6 +135,32 @@ describe('re-run detection', () => {
     expect(commenter.isRerun()).toBe(true);
   });
 
+  it('counts prior completed reviews as the re-run number', async () => {
+    const octokit = mockOctokit({
+      issueComments: [
+        { body: `${COMMENT_MARKER}\n## AI Code Review\n${REVIEW_COMPLETE_MARKER}` },
+        { body: `${COMMENT_MARKER}\n## AI Code Review — Re-run #1\n${REVIEW_COMPLETE_MARKER}` },
+        { body: `${COMMENT_MARKER}\n## ⏳ AI Code Review\n\nprogress only` }, // no complete marker
+      ],
+    });
+    const commenter = commenterWith(octokit);
+
+    expect(commenter.rerunNumber()).toBe(0);
+    await commenter.postOrUpdateComment('## progress');
+    expect(commenter.isRerun()).toBe(true);
+    expect(commenter.rerunNumber()).toBe(2); // two completed reviews before this one
+  });
+
+  it('reports re-run number 0 on a first run', async () => {
+    const octokit = mockOctokit({
+      issueComments: [{ body: `${COMMENT_MARKER}\n## ⏳ AI Code Review\n\nprogress only` }],
+    });
+    const commenter = commenterWith(octokit);
+
+    await commenter.postOrUpdateComment('## progress');
+    expect(commenter.rerunNumber()).toBe(0);
+  });
+
   it('ignores progress/error comments that never reached completion', async () => {
     const octokit = mockOctokit({
       issueComments: [{ body: `${COMMENT_MARKER}\n## ⏳ AI Code Review\n\nReview starting...` }],

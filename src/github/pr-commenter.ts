@@ -48,6 +48,7 @@ export class PRCommenter {
   private currentCommentId: number | null = null;
   private authenticatedUser: string | null = null;
   private priorCompletedRun = false;
+  private priorCompletedRuns = 0;
   private threadPermissionWarned = false;
 
   constructor(
@@ -97,6 +98,17 @@ export class PRCommenter {
    */
   isRerun(): boolean {
     return this.priorCompletedRun;
+  }
+
+  /**
+   * How many COMPLETED reviews already exist on this PR — i.e. which re-run
+   * this is. Each completed run leaves exactly one summary comment carrying
+   * REVIEW_COMPLETE_MARKER (minimized old ones still appear in listComments),
+   * so this equals the count of those markers seen at startup. 0 on a first
+   * run (or if the scan failed — fail-open, consistent with isRerun()).
+   */
+  rerunNumber(): number {
+    return this.priorCompletedRuns;
   }
 
   async updateProgress(agentName: string, status: AgentStatus): Promise<void> {
@@ -472,6 +484,7 @@ export class PRCommenter {
         // a display state), so the signal survives run after run.
         if (comment.body.includes(REVIEW_COMPLETE_MARKER)) {
           this.priorCompletedRun = true;
+          this.priorCompletedRuns += 1;
         }
 
         try {
