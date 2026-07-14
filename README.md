@@ -38,12 +38,12 @@ That's it. Three lines of config for a full review.
 review_mode: 'combined'   # or 'separate'
 ```
 
-Both modes produce the same output shape: categorized, severity-ranked findings in the summary comment, inline comments for critical/high/medium findings, Mermaid diagrams in the PR description, and (optionally) a Backstage report.
+Both modes produce the same output shape: categorized, severity-ranked findings in the summary comment, inline comments for every finding, Mermaid diagrams in the PR description, and (optionally) a Backstage report.
 
 Notes on review behavior (both modes):
 - Missing JSDoc/TSDoc is never flagged (missing types still are).
 - Inline comments are never posted on unit test files (`*.spec.ts`, `*.unit.ts`, `*.test.ts`); missing-coverage findings are placed on the production file.
-- Inline comments are posted for critical/high/medium findings only; low/nit findings appear in the summary comment and the Backstage payload.
+- On the first review, inline comments are posted for ALL findings (every severity, with paste-ready suggestions); on re-runs, only critical/high findings and documentation suggestions get new inline comments. Everything always appears in the summary comment and the Backstage payload.
 
 ## What It Reviews
 
@@ -157,7 +157,7 @@ The action manages the whole comment lifecycle on a PR, so commenting, collapsin
 | One live summary | Previous AI review summary comments are minimized as OUTDATED — only the latest stays visible |
 | Noisy bot comments collapsed | `enable_bot_comment_cleanup` (default on): known noise (e.g. Unit Test Quality reports) is hidden entirely; any other recurring bot comment type (SonarQube etc.) keeps only the latest occurrence |
 | Outdated findings auto-resolved | On every run, its own inline threads are resolved when the issue no longer exists in the re-reviewed code (and duplicate threads at one location collapse to the latest) |
-| Re-runs focus on what matters | `enable_rerun_focus` (default on): the FIRST review is exhaustive (inline comments for critical/high/medium). Once a completed review exists on the PR, re-runs post NEW inline comments **only for critical/high** — new medium/low/nit findings still appear in the summary totals but never as fresh inline comments, so fix-and-push doesn't spawn an endless stream of nitpicks. Existing medium/low threads are untouched: they stay open until actually fixed, then auto-resolve. Re-runs also keep the first run's PR description and diagrams (2 fewer AI calls) |
+| Re-runs focus on what matters | `enable_rerun_focus` (default on): the FIRST review is exhaustive (inline comments for every severity). Once a completed review exists on the PR, re-runs post NEW inline comments **only for critical/high findings and documentation suggestions** — other new medium/low/nit findings still appear in the summary totals but never as fresh inline comments, so fix-and-push doesn't spawn an endless stream of nitpicks. Existing medium/low threads are untouched: they stay open until actually fixed, then auto-resolve. Re-runs also keep the first run's PR description and diagrams (2 fewer AI calls) |
 | Resolved-but-recurring issues reopened | On a re-run, if a thread was resolved but its critical/high issue is still detected, the thread is **unresolved** and gets a templated reply explaining why the finding matters (no AI call). Threads resolved after an accepted human justification are never reopened |
 | Human replies answered | `enable_reply_handling` (default on): when someone replies to a review comment, the AI verifies the claim against the current code and posts a justification reply in EVERY such thread — agreeing and **resolving the thread** if the person is right (or the issue is fixed), or explaining exactly why the issue still stands |
 

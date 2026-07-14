@@ -233,7 +233,7 @@ A top-level catch in `runReview` guarantees Backstage receives a `failed` report
    tables grouped by severity / category / activity; format snapshot-locked).
 7. Handle human replies (AI verdict vs current code → justification reply →
    resolve valid ones); resolve stale threads; post new inline comments
-   (critical/high/medium, never on test files).
+   (every severity on first runs, critical/high + documentation suggestions on re-runs, never on test files).
 8. Regenerate the AI PR description + Mermaid diagrams below
    `----AI-description----` (user content above the separator is preserved).
 9. Set outputs, report to Backstage, write the job summary, apply the fail

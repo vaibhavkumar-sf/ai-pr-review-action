@@ -81,8 +81,13 @@ export const SPECIALIST_CATEGORY_IDS = CATEGORY_IDS.filter(
 
 export const VALID_FINDING_CATEGORIES = new Set<string>(SPECIALIST_CATEGORY_IDS);
 
-/** Severities that get inline PR comments (lower ones stay in the summary only). */
-export const INLINE_SEVERITIES: ReadonlySet<Severity> = new Set(['critical', 'high', 'medium']);
+/**
+ * Severities that get inline PR comments on a FIRST run: all of them. The
+ * first review is the exhaustive one — every finding (including low-severity
+ * documentation suggestions) lands as an inline comment with its suggestion.
+ * Noise control lives in RERUN_INLINE_SEVERITIES, not here.
+ */
+export const INLINE_SEVERITIES: ReadonlySet<Severity> = new Set(SEVERITY_IDS);
 
 /**
  * Re-runs only inline-comment the severities a developer MUST act on. New
@@ -91,9 +96,26 @@ export const INLINE_SEVERITIES: ReadonlySet<Severity> = new Set(['critical', 'hi
  */
 export const RERUN_INLINE_SEVERITIES: ReadonlySet<Severity> = new Set(['critical', 'high']);
 
-/** The inline-comment severity gate for this run (re-runs focus on critical/high). */
-export function inlineSeveritiesFor(isRerun: boolean): ReadonlySet<Severity> {
-  return isRerun ? RERUN_INLINE_SEVERITIES : INLINE_SEVERITIES;
+/**
+ * Categories that keep inline-commenting on re-runs regardless of severity.
+ * Documentation findings are always low but carry paste-ready suggestions the
+ * developer applies from the inline comment, so they must keep appearing for
+ * functions added after the first review. Fingerprint dedup in InlineReviewer
+ * stops previously-posted ones from reposting, so this cannot loop.
+ */
+export const RERUN_INLINE_CATEGORIES: ReadonlySet<ReviewCategory> = new Set(['documentation']);
+
+/**
+ * The inline-comment gate for one finding. First runs inline everything; on
+ * re-runs only critical/high findings — plus documentation suggestions — get
+ * NEW inline comments.
+ */
+export function isInlineWorthy(
+  finding: Pick<Finding, 'severity' | 'category'>,
+  isRerun: boolean,
+): boolean {
+  if (!isRerun) return INLINE_SEVERITIES.has(finding.severity);
+  return RERUN_INLINE_SEVERITIES.has(finding.severity) || RERUN_INLINE_CATEGORIES.has(finding.category);
 }
 
 // ─── Finding coercion (the ONE place raw model output becomes a Finding) ────
