@@ -182,9 +182,9 @@ exports[`formatTrackingMetrics snapshot renders the tracking metrics section 1`]
 
 #### Review Activity (this run)
 
-| 🆕 New inline | ♻️ Carried-over | ✅ Resolved (fixed) | 💬 Replies posted | ☑️ Resolved (replies) | 🤖 Bot hidden |
-|:-:|:-:|:-:|:-:|:-:|:-:|
-| 3 | 1 | 2 | 1 | 1 | 4 |
+| 🆕 New inline | ♻️ Carried-over | ✅ Resolved (fixed) | 🔁 Reopened | 💬 Replies posted | ☑️ Resolved (replies) | 🤖 Bot hidden |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 3 | 1 | 2 | 1 | 1 | 1 | 4 |
 
 <sub>Reported to the Backstage tracker — each review run is stored as a separate row, so re-reviews of this PR are tracked individually.</sub>
 "

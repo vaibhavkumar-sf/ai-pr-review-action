@@ -83,6 +83,18 @@ export const VALID_FINDING_CATEGORIES = new Set<string>(SPECIALIST_CATEGORY_IDS)
 /** Severities that get inline PR comments (lower ones stay in the summary only). */
 export const INLINE_SEVERITIES: ReadonlySet<Severity> = new Set(['critical', 'high', 'medium']);
 
+/**
+ * Re-runs only inline-comment the severities a developer MUST act on. New
+ * medium/low/nit findings on a re-run stay in the summary tables — posting
+ * them inline created an endless fix→push→new-comments loop.
+ */
+export const RERUN_INLINE_SEVERITIES: ReadonlySet<Severity> = new Set(['critical', 'high']);
+
+/** The inline-comment severity gate for this run (re-runs focus on critical/high). */
+export function inlineSeveritiesFor(isRerun: boolean): ReadonlySet<Severity> {
+  return isRerun ? RERUN_INLINE_SEVERITIES : INLINE_SEVERITIES;
+}
+
 // ─── Finding coercion (the ONE place raw model output becomes a Finding) ────
 
 /** Validates a raw severity, falling back to 'medium' for anything unknown. */

@@ -233,6 +233,7 @@ export function formatTrackingMetrics(
     ['🆕 New inline', activity.inlineCommentsNew],
     ['♻️ Carried-over', activity.inlineCommentsExisting],
     ['✅ Resolved (fixed)', activity.staleThreadsResolved],
+    ['🔁 Reopened', activity.threadsReopened],
     ['💬 Replies posted', activity.repliesPosted],
     ['☑️ Resolved (replies)', activity.threadsResolvedFromReplies],
     ['🤖 Bot hidden', activity.botCommentsHidden],

@@ -26,6 +26,12 @@ export interface ReviewThread {
 export const KNOWN_BOT_LOGINS = /^(github-actions|sonarqubecloud|sonarcloud|dependabot|renovate)$/;
 
 /**
+ * Appended by the reply handler when it resolves a thread after accepting a
+ * human's justification. Reopen logic must never undo these resolutions.
+ */
+export const RESOLUTION_FOOTER = '_Resolving this thread._';
+
+/**
  * Login matchers relative to OUR authenticated user. GraphQL returns logins
  * without the '[bot]' suffix while REST includes it — both variants match.
  */
@@ -82,6 +88,17 @@ export async function resolveReviewThreadById(octokit: Octokit, threadId: string
   await octokit.graphql(`
     mutation($threadId: ID!) {
       resolveReviewThread(input: {threadId: $threadId}) {
+        thread { isResolved }
+      }
+    }
+  `, { threadId });
+}
+
+/** Unresolves (reopens) a review thread. Throws on failure — callers decide how to degrade. */
+export async function unresolveReviewThreadById(octokit: Octokit, threadId: string): Promise<void> {
+  await octokit.graphql(`
+    mutation($threadId: ID!) {
+      unresolveReviewThread(input: {threadId: $threadId}) {
         thread { isResolved }
       }
     }

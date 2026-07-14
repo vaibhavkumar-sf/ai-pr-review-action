@@ -159,6 +159,7 @@ export interface ActionConfig {
   postInlineComments: boolean;
   postDataUrl: string;
   enableReplyHandling: boolean;
+  enableRerunFocus: boolean;
   enableBotCommentCleanup: boolean;
   maxFilesToReview: number;
   excludePatterns: string[];

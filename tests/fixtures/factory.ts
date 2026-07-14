@@ -36,6 +36,7 @@ export function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig 
     postInlineComments: true,
     postDataUrl: '',
     enableReplyHandling: true,
+    enableRerunFocus: true,
     enableBotCommentCleanup: true,
     maxFilesToReview: 50,
     excludePatterns: [],

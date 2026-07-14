@@ -76,6 +76,14 @@ describe('parseActionInputs', () => {
     expect(config.maxRetries).toBe(5);
   });
 
+  it('enables re-run focus by default and honors an explicit opt-out', () => {
+    validMinimum();
+    expect(parseActionInputs().enableRerunFocus).toBe(true);
+
+    setInputs({ enable_rerun_focus: 'false' });
+    expect(parseActionInputs().enableRerunFocus).toBe(false);
+  });
+
   it('falls back to the default and warns on a malformed number', () => {
     validMinimum();
     setInputs({ max_retries: 'abc' });

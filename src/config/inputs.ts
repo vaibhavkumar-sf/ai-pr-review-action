@@ -192,6 +192,7 @@ export function parseActionInputs(): ActionConfig {
     postInlineComments: getBoolean('post_inline_comments'),
     postDataUrl: getString('post_data_url'),
     enableReplyHandling: getBoolean('enable_reply_handling'),
+    enableRerunFocus: getBoolean('enable_rerun_focus'),
     enableBotCommentCleanup: getBoolean('enable_bot_comment_cleanup'),
     maxFilesToReview: getNumber('max_files_to_review'),
     // User patterns are APPENDED to the built-in defaults, never replacing them
