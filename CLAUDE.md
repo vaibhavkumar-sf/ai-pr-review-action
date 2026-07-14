@@ -68,8 +68,8 @@ See `docs/architecture.md` for the full map, fail-safety table, provider matrix,
 
 ### Comments strategy
 - **Summary comment:** one fixed comment per run; old ones minimized (not deleted) via GraphQL `minimizeComment(classifier: OUTDATED)`.
-- **Inline comments:** per finding via the Review API (`line` + `side: 'RIGHT'`), critical/high/medium only, never on test files.
-- **Re-run focus** (`enable_rerun_focus`, default on): once a completed review exists on the PR (hidden `REVIEW_COMPLETE_MARKER` in the summary), re-runs post NEW inline comments for critical/high only (mediums/lows still found and counted in the summary), reopen resolved threads whose critical/high issue reappeared (templated reply, no AI call, never after an accepted human justification), and keep the existing PR description/diagrams.
+- **Inline comments:** per finding via the Review API (`line` + `side: 'RIGHT'`), ALL severities on first runs, never on test files.
+- **Re-run focus** (`enable_rerun_focus`, default on): once a completed review exists on the PR (hidden `REVIEW_COMPLETE_MARKER` in the summary), re-runs post NEW inline comments for critical/high plus documentation-category findings only (other mediums/lows still found and counted in the summary), reopen resolved threads whose critical/high issue reappeared (templated reply, no AI call, never after an accepted human justification), and keep the existing PR description/diagrams.
 - **Stale threads:** auto-resolved when fixed (skipping threads with unanswered human replies). Resolve/unresolve mutations need the workflow to grant `contents: write` (GitHub requires push access for PR conversations); with `contents: read` they fail with "Resource not accessible by integration" — surfaced as a once-per-run warning with remediation.
 - **Tracking metrics:** grouped tables (by severity / by category / review activity), each with its own total.
 - **Finding counts:** only shown after consolidation, never during progress.

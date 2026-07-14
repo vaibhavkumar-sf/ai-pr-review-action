@@ -82,7 +82,12 @@ function output(key: string): unknown {
   return call ? call[1] : undefined;
 }
 
-function stubAgent(findings = [makeFinding(), makeFinding({ severity: 'medium', category: 'code-quality', line: 3, title: 'Inline return type' }), makeFinding({ severity: 'critical', category: 'security', line: 9, title: 'SQL injection' })]) {
+function stubAgent(findings = [
+  makeFinding(),
+  makeFinding({ severity: 'medium', category: 'code-quality', line: 3, title: 'Inline return type' }),
+  makeFinding({ severity: 'critical', category: 'security', line: 9, title: 'SQL injection' }),
+  makeFinding({ severity: 'low', category: 'documentation', line: 20, title: 'Missing JSDoc on createUser' }),
+]) {
   return {
     name: 'comprehensive',
     category: 'comprehensive',
@@ -117,7 +122,7 @@ describe('runReview pipeline (integration)', () => {
     await expect(runReview(baseConfig())).resolves.toBeUndefined();
 
     expect(output('review_status')).toBe('completed');
-    expect(output('total_findings')).toBe(3);
+    expect(output('total_findings')).toBe(4);
     expect(output('critical_count')).toBe(1);
 
     // The final review comment (real formatter output) reached the PR.
@@ -136,10 +141,12 @@ describe('runReview pipeline (integration)', () => {
     const config = makeConfig({ ...baseConfig(), postInlineComments: true });
     await expect(runReview(config)).resolves.toBeUndefined();
 
-    // Only the critical and high findings reach the inline reviewer — the
-    // medium one stays summary-only on a re-run.
-    const inlined = inlineReviewer.postReview.mock.calls[0][0] as Array<{ severity: string }>;
-    expect(inlined.map(f => f.severity).sort()).toEqual(['critical', 'high']);
+    // Critical/high findings plus the low documentation suggestion reach the
+    // inline reviewer — the medium one stays summary-only on a re-run.
+    const inlined = inlineReviewer.postReview.mock.calls[0][0] as Array<{ severity: string; category: string }>;
+    expect(inlined.map(f => `${f.severity}:${f.category}`).sort()).toEqual(
+      ['critical:security', 'high:security', 'low:documentation'],
+    );
 
     // Regressed critical/high findings were offered for thread reopening.
     expect(commenter.reopenRegressedThreads).toHaveBeenCalledTimes(1);
@@ -150,7 +157,7 @@ describe('runReview pipeline (integration)', () => {
 
     // Summary totals still count ALL severities, and the completion marker +
     // re-run note are embedded for the next run.
-    expect(output('total_findings')).toBe(3);
+    expect(output('total_findings')).toBe(4);
     const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
     const finalPost = posted[posted.length - 1];
     expect(finalPost).toContain('<!-- ai-pr-review-complete -->');
@@ -158,16 +165,16 @@ describe('runReview pipeline (integration)', () => {
     expect(finalPost).toContain('AI Code Review — Re-run #2');
   });
 
-  it('first run: inlines critical/high/medium and never calls the reopen path', async () => {
+  it('first run: inlines every severity and never calls the reopen path', async () => {
     commenter.isRerun.mockReturnValue(false);
-    inlineReviewer.postReview.mockResolvedValue(3);
+    inlineReviewer.postReview.mockResolvedValue(4);
     (gatherAllContext as jest.Mock).mockResolvedValue(makeContext());
 
     const config = makeConfig({ ...baseConfig(), postInlineComments: true });
     await expect(runReview(config)).resolves.toBeUndefined();
 
     const inlined = inlineReviewer.postReview.mock.calls[0][0] as Array<{ severity: string }>;
-    expect(inlined.map(f => f.severity).sort()).toEqual(['critical', 'high', 'medium']);
+    expect(inlined.map(f => f.severity).sort()).toEqual(['critical', 'high', 'low', 'medium']);
     expect(commenter.reopenRegressedThreads).not.toHaveBeenCalled();
     expect((appendToPRDescription as jest.Mock).mock.calls[0][5]).toBe(false);
     // Completion marker still embedded so the NEXT run detects a re-run.

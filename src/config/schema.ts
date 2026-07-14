@@ -231,7 +231,7 @@ export const INPUTS: readonly InputSpec[] = [
     type: 'boolean',
     default: 'true',
     group: 'Behavior Flags',
-    description: 'On re-runs (a completed AI review already exists on this PR): limit NEW inline comments to critical/high findings, reopen resolved threads whose critical/high issue reappeared, and keep the existing PR description/diagrams. Summary totals still count all severities. Disable to restore full first-run behavior on every run',
+    description: 'On re-runs (a completed AI review already exists on this PR): limit NEW inline comments to critical/high findings plus documentation suggestions, reopen resolved threads whose critical/high issue reappeared, and keep the existing PR description/diagrams. Summary totals still count all severities. Disable to restore full first-run behavior on every run',
   },
   {
     name: 'enable_bot_comment_cleanup',

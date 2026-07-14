@@ -6,9 +6,11 @@ import {
   coerceFinding,
   coerceSeverity,
   INLINE_SEVERITIES,
-  inlineSeveritiesFor,
+  isInlineWorthy,
+  RERUN_INLINE_CATEGORIES,
   RERUN_INLINE_SEVERITIES,
   SEVERITY_ICONS,
+  SEVERITY_IDS,
   SEVERITY_LABELS,
   SEVERITY_RANK,
   SEVERITY_TAGS,
@@ -74,8 +76,8 @@ describe('taxonomy derived maps', () => {
     expect(SPECIALIST_CATEGORY_IDS).not.toContain('comprehensive');
   });
 
-  it('inline severities are critical/high/medium only', () => {
-    expect([...INLINE_SEVERITIES].sort()).toEqual(['critical', 'high', 'medium']);
+  it('first-run inline severities cover every severity (exhaustive first pass)', () => {
+    expect([...INLINE_SEVERITIES].sort()).toEqual([...SEVERITY_IDS].sort());
   });
 
   it('re-run inline severities are exactly critical/high and a subset of the first-run set', () => {
@@ -85,9 +87,20 @@ describe('taxonomy derived maps', () => {
     }
   });
 
-  it('inlineSeveritiesFor switches on the re-run flag', () => {
-    expect(inlineSeveritiesFor(false)).toBe(INLINE_SEVERITIES);
-    expect(inlineSeveritiesFor(true)).toBe(RERUN_INLINE_SEVERITIES);
+  it('isInlineWorthy: first run inlines every severity', () => {
+    for (const severity of SEVERITY_IDS) {
+      expect(isInlineWorthy({ severity, category: 'code-quality' }, false)).toBe(true);
+    }
+  });
+
+  it('isInlineWorthy: re-runs inline critical/high only, except documentation findings', () => {
+    expect(isInlineWorthy({ severity: 'critical', category: 'security' }, true)).toBe(true);
+    expect(isInlineWorthy({ severity: 'high', category: 'code-quality' }, true)).toBe(true);
+    expect(isInlineWorthy({ severity: 'medium', category: 'code-quality' }, true)).toBe(false);
+    expect(isInlineWorthy({ severity: 'low', category: 'code-quality' }, true)).toBe(false);
+    // Documentation suggestions are always low but must keep landing inline.
+    expect(isInlineWorthy({ severity: 'low', category: 'documentation' }, true)).toBe(true);
+    expect(RERUN_INLINE_CATEGORIES.has('documentation')).toBe(true);
   });
 });
 

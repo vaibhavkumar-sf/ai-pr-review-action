@@ -17,7 +17,7 @@ import { appendToPRDescription } from './description-updater';
 import { runPhase } from './phase';
 import { isTestFile } from '../config/patterns';
 import { ERROR_SNIPPET_CHARS } from '../config/limits';
-import { inlineSeveritiesFor, RERUN_INLINE_SEVERITIES } from '../config/taxonomy';
+import { isInlineWorthy, RERUN_INLINE_SEVERITIES } from '../config/taxonomy';
 import { logger, writeJobSummary } from '../utils/logger';
 import { formatDuration } from '../utils/text';
 
@@ -211,7 +211,7 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
   // The completion marker makes the NEXT run detect this one as a prior
   // completed review; the note tells developers why mediums aren't inline.
   const rerunNote = isRerun
-    ? '\n\n<sub>🔁 Re-run focus: new inline comments are limited to critical/high findings; the totals above include all severities.</sub>'
+    ? '\n\n<sub>🔁 Re-run focus: new inline comments are limited to critical/high findings and documentation suggestions; the totals above include all severities.</sub>'
     : '';
   const rerunNumber = isRerun ? commenter.rerunNumber() : 0;
   const finalComment = formatReviewComment(merged, config, context, rerunNumber) + rerunNote + `\n${REVIEW_COMPLETE_MARKER}`;
@@ -450,12 +450,11 @@ async function postInlineComments(
     const parsedDiffs = parseDiff(context.diff);
     const inlineReviewer = new InlineReviewer(octokit, config.owner, config.repo, config.prNumber);
 
-    // Inline comments cover critical/high/medium on first runs and only
-    // critical/high on re-runs; never on unit test files (findings remain in
-    // the summary comment) — mirrors the prompt-level suppression as a guard.
-    const severities = inlineSeveritiesFor(isRerun);
+    // Inline comments cover ALL severities on first runs (the exhaustive pass)
+    // and only critical/high — plus documentation suggestions — on re-runs;
+    // never on unit test files (findings remain in the summary comment).
     const inlineFindings = consolidated.filter(
-      f => severities.has(f.severity) && !isTestFile(f.file),
+      f => isInlineWorthy(f, isRerun) && !isTestFile(f.file),
     );
 
     if (inlineFindings.length > 0) {
