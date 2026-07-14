@@ -31,29 +31,18 @@ export function formatReviewComment(
   parts.push(`> **Model:** \`${config.anthropicModel}\` | **Mode:** \`${config.reviewMode}\`${profileMeta} | **Duration:** ${formatDuration(result.durationMs)}`);
   parts.push('');
 
-  // Severity summary table
+  // Severity summary — horizontal (metrics as columns) to minimize vertical space
   parts.push('### Summary');
   parts.push('');
-  parts.push('| Severity | Count |');
-  parts.push('|----------|-------|');
-  parts.push(`| ${SEVERITY_ICONS.critical} Critical | ${result.criticalCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.high} High | ${result.highCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.medium} Medium | ${result.mediumCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.low} Low | ${result.lowCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.nit} Nit | ${result.nitCount} |`);
-  parts.push(`| **Total** | **${result.totalFindings}** |`);
+  parts.push(...horizontalTable(severityCells(result)));
   parts.push('');
 
-  // Category breakdown table — findings carry per-finding categories in both modes
+  // Category breakdown — findings carry per-finding categories in both modes
   const categoryCounts = countByCategory(result.findings);
   if (categoryCounts.length > 0) {
     parts.push('### Findings by Category');
     parts.push('');
-    parts.push('| Category | Count |');
-    parts.push('|----------|-------|');
-    for (const [category, count] of categoryCounts) {
-      parts.push(`| ${CATEGORY_LABELS[category]} | ${count} |`);
-    }
+    parts.push(...horizontalTable(categoryCounts.map(([category, count]) => [CATEGORY_LABELS[category], count])));
     parts.push('');
   }
 
@@ -219,42 +208,35 @@ export function formatTrackingMetrics(
   parts.push('### 📊 Backstage Tracking Metrics');
   parts.push('');
 
-  // Group 1: findings by severity (sums to the total)
+  // Group 1: findings by severity (sums to the total) — horizontal for compactness
   parts.push(`#### Findings by Severity — ${result.totalFindings} total`);
   parts.push('');
-  parts.push('| Severity | Count |');
-  parts.push('|----------|-------|');
-  parts.push(`| ${SEVERITY_ICONS.critical} Critical | ${result.criticalCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.high} High | ${result.highCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.medium} Medium | ${result.mediumCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.low} Low | ${result.lowCount} |`);
-  parts.push(`| ${SEVERITY_ICONS.nit} Nit | ${result.nitCount} |`);
-  parts.push(`| **Total** | **${result.totalFindings}** |`);
+  parts.push(...horizontalTable(severityCells(result)));
   parts.push('');
 
   // Group 2: findings by category (sums to the same total)
   const categoryCounts = new Map<ReviewCategory, number>(countByCategory(result.findings));
   parts.push(`#### Findings by Category — ${result.totalFindings} total`);
   parts.push('');
-  parts.push('| Category | Count |');
-  parts.push('|----------|-------|');
-  for (const category of SPECIALIST_CATEGORY_IDS) {
-    parts.push(`| ${CATEGORY_LABELS[category]} | ${categoryCounts.get(category) ?? 0} |`);
-  }
-  parts.push(`| **Total** | **${result.totalFindings}** |`);
+  parts.push(...horizontalTable([
+    ...SPECIALIST_CATEGORY_IDS.map(
+      (category): [string, number] => [CATEGORY_LABELS[category], categoryCounts.get(category) ?? 0],
+    ),
+    ['**Total**', `**${result.totalFindings}**`],
+  ]));
   parts.push('');
 
   // Group 3: comment-lifecycle activity for THIS run (not finding counts)
   parts.push('#### Review Activity (this run)');
   parts.push('');
-  parts.push('| Activity | Count |');
-  parts.push('|----------|-------|');
-  parts.push(`| 🆕 New inline comments (this run) | ${activity.inlineCommentsNew} |`);
-  parts.push(`| ♻️ Carried-over comments (already posted) | ${activity.inlineCommentsExisting} |`);
-  parts.push(`| ✅ Threads resolved (fixed in code) | ${activity.staleThreadsResolved} |`);
-  parts.push(`| 💬 Replies posted (to human replies) | ${activity.repliesPosted} |`);
-  parts.push(`| ☑️ Threads resolved from valid replies | ${activity.threadsResolvedFromReplies} |`);
-  parts.push(`| 🤖 Bot comments hidden | ${activity.botCommentsHidden} |`);
+  parts.push(...horizontalTable([
+    ['🆕 New inline', activity.inlineCommentsNew],
+    ['♻️ Carried-over', activity.inlineCommentsExisting],
+    ['✅ Resolved (fixed)', activity.staleThreadsResolved],
+    ['💬 Replies posted', activity.repliesPosted],
+    ['☑️ Resolved (replies)', activity.threadsResolvedFromReplies],
+    ['🤖 Bot hidden', activity.botCommentsHidden],
+  ]));
   parts.push('');
 
   if (config.postDataUrl) {
@@ -263,6 +245,31 @@ export function formatTrackingMetrics(
   }
 
   return parts.join('\n');
+}
+
+/**
+ * Renders label→value pairs as a compact horizontal table — labels across the
+ * top, all values in a single row beneath — instead of one table row per
+ * metric. Same information, a fraction of the vertical space (3 rendered rows
+ * regardless of metric count), so the summary comment scrolls far less.
+ */
+function horizontalTable(cells: Array<[string, string | number]>): string[] {
+  const header = `| ${cells.map(([label]) => label).join(' | ')} |`;
+  const divider = `|${cells.map(() => ':-:').join('|')}|`;
+  const values = `| ${cells.map(([, value]) => value).join(' | ')} |`;
+  return [header, divider, values];
+}
+
+/** The five severity buckets plus a bold total, as horizontal-table cells. */
+function severityCells(result: MergedReviewResult): Array<[string, string | number]> {
+  return [
+    [`${SEVERITY_ICONS.critical} Critical`, result.criticalCount],
+    [`${SEVERITY_ICONS.high} High`, result.highCount],
+    [`${SEVERITY_ICONS.medium} Medium`, result.mediumCount],
+    [`${SEVERITY_ICONS.low} Low`, result.lowCount],
+    [`${SEVERITY_ICONS.nit} Nit`, result.nitCount],
+    ['**Total**', `**${result.totalFindings}**`],
+  ];
 }
 
 function countByCategory(findings: Finding[]): Array<[ReviewCategory, number]> {
