@@ -19,7 +19,7 @@ describe('prompt loader', () => {
     const text = loadPrompt('system/mermaid-fix', { error_sections: 'SECTION-A\n\n' });
     expect(text).toContain('SECTION-A');
     expect(text).not.toContain('{{error_sections}}');
-    expect(text.startsWith('The Mermaid diagrams have syntax errors.')).toBe(true);
+    expect(text.startsWith('Some Mermaid diagrams have syntax errors.')).toBe(true);
     expect(text).toContain('Common fixes:');
   });
 
