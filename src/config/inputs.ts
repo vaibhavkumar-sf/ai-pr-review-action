@@ -159,6 +159,7 @@ export function parseActionInputs(): ActionConfig {
     anthropicAuthToken: core.getInput('anthropic_auth_token'),
     anthropicBaseUrl: getString('anthropic_base_url'),
     anthropicModel: getString('anthropic_model'),
+    modelPricing: getString('model_pricing'),
     maxTokens: getNumber('max_tokens'),
     thinkingBudget: getNumber('thinking_budget'),
     contextWindow: getNumber('context_window'),

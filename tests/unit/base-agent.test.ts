@@ -1,5 +1,5 @@
 import { ComprehensiveAgent } from '../../src/agents/comprehensive.agent';
-import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResult } from '../../src/providers/ai-provider';
+import { AIProvider, ChatMessage, ChatOptions, ChatResponse, ConnectionCheckResult, ModelUsage } from '../../src/providers/ai-provider';
 import { OUTPUT_TOKENS_CEILING } from '../../src/config/limits';
 import { makeChangedFile, makeConfig, makeContext } from '../fixtures/factory';
 
@@ -34,6 +34,7 @@ class ScriptedProvider implements AIProvider {
     return { model: 'glm-5.2', latencyMs: 1, outputTokens: 1 };
   }
   getResolvedModel(): string { return 'glm-5.2'; }
+  getModelUsage(): ModelUsage[] { return []; }
 }
 
 const GOOD_JSON = JSON.stringify({ findings: [], summary: 'Looks solid.', score: 9 });

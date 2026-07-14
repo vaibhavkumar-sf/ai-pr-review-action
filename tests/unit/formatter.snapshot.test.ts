@@ -40,7 +40,30 @@ describe('formatTrackingMetrics snapshot', () => {
       repliesPosted: 1,
       threadsResolvedFromReplies: 1,
       botCommentsHidden: 4,
+      aiCalls: 7,
+      aiInputTokens: 245120,
+      aiOutputTokens: 38440,
+      estimatedCostUsd: 0.2317,
     });
     expect(metrics).toMatchSnapshot();
+  });
+
+  it('shows n/a cost (and no estimate footnote) when no model is priced', () => {
+    const metrics = formatTrackingMetrics(makeMerged(), makeConfig(), {
+      inlineCommentsNew: 0,
+      inlineCommentsExisting: 0,
+      staleThreadsResolved: 0,
+      threadsReopened: 0,
+      repliesPosted: 0,
+      threadsResolvedFromReplies: 0,
+      botCommentsHidden: 0,
+      aiCalls: 3,
+      aiInputTokens: 1000,
+      aiOutputTokens: 500,
+      estimatedCostUsd: null,
+    });
+    expect(metrics).toContain('| 💰 Est. cost |');
+    expect(metrics).toContain(' n/a |');
+    expect(metrics).not.toContain('estimated client-side');
   });
 });

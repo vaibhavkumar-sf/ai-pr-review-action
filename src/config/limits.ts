@@ -427,3 +427,8 @@ export const DEFAULT_AGENT_SCORE = 5;
 
 /** Kroki.io Mermaid renderer, used to VALIDATE diagrams before posting (not to render). */
 export const KROKI_MERMAID_URL = 'https://kroki.io/mermaid/svg';
+
+// ─── Cost estimation ────────────────────────────────────────────────────────
+
+/** model_pricing prices are quoted in USD per MILLION tokens (industry convention). */
+export const USD_PER_MILLION_TOKENS_DIVISOR = 1_000_000;

@@ -104,6 +104,14 @@ outputs:
     description: 'Number of resolved threads reopened because their critical/high issue was detected again on a re-run'
   bot_comments_hidden:
     description: 'Number of noisy bot comments minimized during cleanup'
+  ai_calls:
+    description: 'Number of AI chat calls made during the run (agents, consolidation, replies, description, diagrams)'
+  input_tokens:
+    description: 'Total input tokens consumed across all AI calls this run'
+  output_tokens:
+    description: 'Total output tokens (including thinking) across all AI calls this run'
+  estimated_cost_usd:
+    description: 'Estimated run cost in USD from token counts x model_pricing (client-side estimate, not billing data; empty when model_pricing is unset)'
 
 runs:
   using: 'docker'

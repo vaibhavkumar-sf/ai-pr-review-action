@@ -116,6 +116,9 @@ export interface ActionConfig {
   // Model id, or a comma-separated fallback chain tried in order (the next is
   // used only when a model is rejected as unknown/unsupported by the endpoint).
   anthropicModel: string;
+  // Raw model_pricing spec ("model=input/output" pairs, USD per 1M tokens);
+  // parsed lazily by results/cost.ts. Empty = report tokens without USD.
+  modelPricing: string;
   // Output-token cap per AI response. 0 (default) = auto: use the model's full
   // native output capacity (OUTPUT_TOKENS_CEILING, clamped by any smaller cap
   // the endpoint advertises via rejection). Positive = manual cap.
