@@ -13,6 +13,7 @@ const strict: ProfileMap = {
   'architecture': true,
   'testing': true,
   'api-design': true,
+  'documentation': true,
 };
 
 const standard: ProfileMap = {
@@ -23,6 +24,7 @@ const standard: ProfileMap = {
   'architecture': true,
   'testing': false,
   'api-design': false,
+  'documentation': true,
 };
 
 const minimal: ProfileMap = {
@@ -33,6 +35,7 @@ const minimal: ProfileMap = {
   'architecture': false,
   'testing': false,
   'api-design': false,
+  'documentation': false,
 };
 
 export const PROFILES: Record<ReviewProfile, ProfileMap> = {

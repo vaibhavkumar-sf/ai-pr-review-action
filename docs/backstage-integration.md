@@ -63,6 +63,7 @@ One JSON object per review run. All keys are snake_case.
   "architecture_count": 2,
   "testing_count": 1,
   "api_design_count": 1,
+  "documentation_count": 2,
   "average_score": 6.5,
   "agents_run": "comprehensive",
   "agents_failed": "",
@@ -105,7 +106,7 @@ Field notes:
 | `review_profile` | string | Only meaningful when `review_mode` = `separate` |
 | `ai_provider` | string | Derived from `anthropic_base_url`: `anthropic`, `openrouter`, `glm`, or `custom` |
 | `*_count` (severity) | int | Counts after deduplication — sum equals `total_findings` |
-| `*_count` (category) | int | One counter per category; sum equals `total_findings`. Categories are always the 7 specialist ones — in combined mode each finding still carries its own category |
+| `*_count` (category) | int | One counter per category; sum equals `total_findings`. Categories are always the 8 specialist ones — in combined mode each finding still carries its own category |
 | `average_score` | float | Mean of agent scores (0–10, one decimal). In combined mode this is the single comprehensive agent's score |
 | `agents_run` / `agents_failed` | string | Comma-separated agent names (`comprehensive` in combined mode) |
 | `inline_comments_new` | int | Inline comments actually posted this run (genuinely new findings) |
@@ -118,7 +119,7 @@ Field notes:
 | `ai_calls` | int | AI chat calls made this run (agents, consolidation, replies, description, diagrams) |
 | `input_tokens` / `output_tokens` | int | Total tokens across all AI calls (output includes thinking) |
 | `estimated_cost_usd` | float \| null | Client-side estimate: token counts × the `model_pricing` input (USD per 1M tokens). `null` when `model_pricing` is unset; partial if some used models are unpriced. Never billing data |
-| `findings[].category` | string | `security`, `code-quality`, `performance`, `type-safety`, `architecture`, `testing`, `api-design` |
+| `findings[].category` | string | `security`, `code-quality`, `performance`, `type-safety`, `architecture`, `testing`, `api-design`, `documentation` |
 | `findings[].severity` | string | `critical`, `high`, `medium`, `low`, `nit` |
 | `findings[].suggestion` | string \| null | Free-text fix guidance |
 | `findings[].has_code_suggestion` | bool | Whether a committable GitHub suggestion was attached to the finding |
@@ -176,6 +177,7 @@ CREATE TABLE ai_code_reviews (
   architecture_count    INTEGER       NOT NULL DEFAULT 0,
   testing_count         INTEGER       NOT NULL DEFAULT 0,
   api_design_count      INTEGER       NOT NULL DEFAULT 0,
+  documentation_count   INTEGER       NOT NULL DEFAULT 0,
   average_score         NUMERIC(4,1),
   agents_run            TEXT,
   agents_failed         TEXT,

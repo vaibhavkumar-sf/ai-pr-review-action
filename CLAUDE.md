@@ -4,7 +4,7 @@
 
 A Docker-based GitHub Action that performs AI-powered code reviews on pull requests. Two modes (`review_mode` input):
 - **combined (default)**: one ComprehensiveAgent covers every dimension in a single exhaustive pass (`prompts/comprehensive.md`); each finding keeps its own per-finding category.
-- **separate**: 7 parallel specialist agents (security, code-quality, performance, type-safety, architecture, testing, api-design) selected by profile/toggles, with an AI consolidation pass afterwards.
+- **separate**: 8 parallel specialist agents (security, code-quality, performance, type-safety, architecture, testing, api-design, documentation) selected by profile/toggles, with an AI consolidation pass afterwards.
 
 Findings are posted as structured PR comments with inline code annotations, and optionally POSTed (aggregates + every finding) to a Backstage tracker via `post_data_url` (`src/results/backstage-reporter.ts`, contract in `docs/backstage-integration.md`).
 

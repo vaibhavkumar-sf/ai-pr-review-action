@@ -272,3 +272,53 @@ describe('BaseAgent context-tool integration', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe('BaseAgent findings[] contract enforcement', () => {
+  const finding = {
+    severity: 'high', category: 'security', file: 'src/a.ts', line: 3,
+    title: 'Hardcoded key', description: 'Key committed to source.',
+  };
+
+  it('accepts a legitimate empty findings[] without any retry', async () => {
+    const provider = new ScriptedProvider([good()]);
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext());
+
+    expect(result.error).toBeUndefined();
+    expect(result.findings).toHaveLength(0);
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('rejects parseable JSON without a findings[] array and heals with a retry', async () => {
+    // Production bug: a stray/nested JSON object parsed fine and silently
+    // became "0 findings" even though the model DID emit findings.
+    const provider = new ScriptedProvider([
+      { content: '{"analysis": "done", "notes": "all good"}', inputTokens: 1, outputTokens: 9000, stopReason: 'end_turn' },
+      { content: JSON.stringify({ findings: [finding], summary: 'One issue.', score: 6 }), inputTokens: 1, outputTokens: 50, stopReason: 'end_turn' },
+    ]);
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext());
+
+    expect(result.error).toBeUndefined();
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].title).toBe('Hardcoded key');
+    expect(provider.calls).toHaveLength(2); // heal retry fired
+  });
+
+  it('salvages findings nested under a wrapper key without an AI retry', async () => {
+    const nested = JSON.stringify({ review: { findings: [finding], summary: 'wrapped', score: 5 } });
+    const provider = new ScriptedProvider([
+      { content: nested, inputTokens: 1, outputTokens: 60, stopReason: 'end_turn' },
+      { content: nested, inputTokens: 1, outputTokens: 60, stopReason: 'end_turn' },
+    ]);
+    const agent = new ComprehensiveAgent(provider, makeConfig());
+
+    const result = await agent.review(makeContext());
+
+    expect(result.error).toBeUndefined();
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].title).toBe('Hardcoded key');
+  });
+});

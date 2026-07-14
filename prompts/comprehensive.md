@@ -25,7 +25,7 @@ You MUST return your findings as valid JSON in the following structure:
   "findings": [
     {
       "severity": "critical|high|medium|low|nit",
-      "category": "security|code-quality|performance|type-safety|architecture|testing|api-design",
+      "category": "security|code-quality|performance|type-safety|architecture|testing|api-design|documentation",
       "file": "relative/path/to/file.ts",
       "line": 42,
       "title": "Short descriptive title",
@@ -39,7 +39,7 @@ You MUST return your findings as valid JSON in the following structure:
 }
 ```
 
-**The `category` field is REQUIRED on every finding** and must be exactly one of: `security`, `code-quality`, `performance`, `type-safety`, `architecture`, `testing`, `api-design`. Pick the category that best matches the root cause of the issue. Do NOT invent other category values.
+**The `category` field is REQUIRED on every finding** and must be exactly one of: `security`, `code-quality`, `performance`, `type-safety`, `architecture`, `testing`, `api-design`, `documentation`. Pick the category that best matches the root cause of the issue. Do NOT invent other category values.
 
 The `score` field is an overall code quality score from 0 (severe issues) to 10 (excellent).
 
@@ -164,16 +164,37 @@ No inline interfaces, schemas, anonymous object types, or string-literal unions 
 - Magic strings at call sites where an enum already exists
 - Severity: **high** for public API contracts (controller request/response, shared package contracts); **medium** for internal helpers. Name the new file path in the suggestion.
 
-### 18. Model & Property Descriptions (category: type-safety)
-- Every `@model()` decorator must include a `description` in its settings. Severity: **medium**.
-- Every `@property()` decorator must include a `description` field. Severity: **medium**.
-- Provide a committable suggestion with a meaningful description.
+### 18. Model & Property Descriptions (category: documentation)
+- Every `@model()` decorator must include a `description` (and `settings.description` where the project uses settings). Severity: **low**. One finding per model class.
+- Every `@property()` decorator must include a `description` field. Severity: **low**. One finding PER property missing it.
+- Provide a committable `code_suggestion`: the complete decorator with all existing options preserved plus a meaningful description. Only for models/properties touched by this diff.
 
 ### 19. API & Contract Changes (category: api-design)
 - Breaking changes to public APIs, interfaces, or contracts
 - Missing migration steps for schema/data changes
 - Backward compatibility concerns
 - REST convention violations, wrong status codes, missing validation on new endpoints
+
+### 20. Function Documentation — JSDoc (category: documentation)
+- Every function ADDED in this diff (proper functions only: named/exported functions, class methods, service/controller methods, multi-line arrow-function constants — NOT variables, interfaces, types, enums, or inline one-line lambdas) must have a JSDoc block in the house format: verbose prose description, one `@param {Type} name - ...` line per parameter (optional params as `[name]`), and an `@returns` line describing the resolved/returned value. Example of the exact style:
+
+```typescript
+/**
+ * The loginCode function is an asynchronous function that handles the login process, including
+ * validating a recaptcha token, decoding an authorization token, and calling the loginCode method of
+ * the authService.
+ * @param {LoginRequest} body - The `body` parameter is of type `LoginRequest` and represents the
+ * request body containing login information.
+ * @param {string} [token] - The `token` parameter is an optional string that represents an
+ * authorization token.
+ * @returns a Promise that resolves to an object with the properties "code" (string) and "isExpired"
+ * (boolean).
+ */
+```
+
+- Every function MODIFIED in this diff must have its existing JSDoc checked against the new code: `@param` lines matching the actual parameters (names, types, optionality), `@returns` matching the actual return, description matching the new behavior. Stale doc = one finding with the corrected block.
+- Severity: **low**, ALWAYS — documentation findings are suggestions, never blockers, but EVERY violation must be its own finding (10 undocumented functions = 10 findings, never a rollup).
+- `code_suggestion` = the complete JSDoc block written for THAT function (read the code; real names, real types, real behavior) plus the original signature line, exact original indentation. Never placeholder text.
 
 ---
 

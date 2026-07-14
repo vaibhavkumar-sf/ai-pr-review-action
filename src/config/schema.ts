@@ -117,7 +117,7 @@ export const INPUTS: readonly InputSpec[] = [
     values: ['combined', 'separate'],
     default: 'combined',
     group: 'Review Mode',
-    description: 'combined (default): one comprehensive all-at-once review covering every category. separate: 7 parallel specialist agents selected by review_profile/toggles',
+    description: 'combined (default): one comprehensive all-at-once review covering every category. separate: 8 parallel specialist agents selected by review_profile/toggles',
   },
   {
     name: 'review_profile',
@@ -125,11 +125,11 @@ export const INPUTS: readonly InputSpec[] = [
     values: ['strict', 'standard', 'minimal'],
     default: 'standard',
     group: 'Review Mode',
-    description: 'Review intensity for separate mode: strict (all 7 agents), standard (5 agents), minimal (2 agents). Ignored in combined mode',
+    description: 'Review intensity for separate mode: strict (all 8 agents), standard (6 agents), minimal (2 agents). Ignored in combined mode',
   },
 
   // ─── Individual Review Toggles (override profile) ───
-  ...(['security', 'code_quality', 'performance', 'type_safety', 'architecture', 'testing', 'api_design'] as const).map(
+  ...(['security', 'code_quality', 'performance', 'type_safety', 'architecture', 'testing', 'api_design', 'documentation'] as const).map(
     (key): InputSpec => ({
       name: `enable_${key}_review`,
       type: 'string',

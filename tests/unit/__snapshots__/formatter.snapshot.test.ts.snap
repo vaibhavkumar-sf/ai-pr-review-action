@@ -176,9 +176,9 @@ exports[`formatTrackingMetrics snapshot renders the tracking metrics section 1`]
 
 #### Findings by Category — 3 total
 
-| 🔒 Security | 📝 Code Quality | ⚡ Performance | 🔍 Type Safety | 🏗️ Architecture | 🧪 Testing | 🔌 API Design | **Total** |
-|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 1 | 1 | 0 | 0 | 0 | 1 | 0 | **3** |
+| 🔒 Security | 📝 Code Quality | ⚡ Performance | 🔍 Type Safety | 🏗️ Architecture | 🧪 Testing | 🔌 API Design | 📚 Documentation | **Total** |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 1 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | **3** |
 
 #### Review Activity (this run)
 

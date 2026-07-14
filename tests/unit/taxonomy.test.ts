@@ -50,6 +50,7 @@ describe('taxonomy derived maps', () => {
       'architecture': '🏗️ Architecture',
       'testing': '🧪 Testing',
       'api-design': '🔌 API Design',
+      'documentation': '📚 Documentation',
       'comprehensive': '🔎 Comprehensive',
     });
   });
@@ -63,6 +64,7 @@ describe('taxonomy derived maps', () => {
       'architecture': '🏗️ Architecture',
       'testing': '🧪 Testing',
       'api-design': '🔌 API Design',
+      'documentation': '📚 Documentation',
       'comprehensive': '🔎 Comprehensive Review',
     });
   });

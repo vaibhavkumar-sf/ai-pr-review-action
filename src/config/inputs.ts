@@ -85,6 +85,7 @@ function resolveAgentOverrides(): Partial<ProfileMap> | undefined {
     'enable_architecture_review': 'architecture',
     'enable_testing_review': 'testing',
     'enable_api_design_review': 'api-design',
+    'enable_documentation_review': 'documentation',
   };
 
   const overrides: Partial<ProfileMap> = {};
