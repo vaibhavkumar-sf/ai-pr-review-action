@@ -264,4 +264,37 @@ describe('reopenRegressedThreads', () => {
     expect(await commenter.reopenRegressedThreads([finding()])).toBe(0);
     expect(octokit.pulls.createReplyForReviewComment).not.toHaveBeenCalled();
   });
+
+  it('warns once with remediation when the token lacks push access', async () => {
+    const core = jest.requireMock('@actions/core') as { warning: jest.Mock };
+    core.warning.mockClear();
+    const threads = [
+      thread({ id: 't1', file: 'src/a.ts', title: 'Issue A' }),
+      thread({ id: 't2', file: 'src/b.ts', title: 'Issue B' }),
+    ];
+    const octokit = mockOctokit({ threads });
+    octokit.graphql.mockImplementation((query: string) => {
+      if (query.includes('reviewThreads')) {
+        return Promise.resolve({ repository: { pullRequest: { reviewThreads: { nodes: threads } } } });
+      }
+      if (query.includes('unresolveReviewThread')) {
+        return Promise.reject(new Error('Resource not accessible by integration'));
+      }
+      return Promise.resolve({});
+    });
+    const commenter = commenterWith(octokit);
+
+    const reopened = await commenter.reopenRegressedThreads([
+      finding({ file: 'src/a.ts', title: 'Issue A' }),
+      finding({ file: 'src/b.ts', title: 'Issue B' }),
+    ]);
+
+    expect(reopened).toBe(0);
+    // Both threads failed, but the permission warning fires exactly once and
+    // names the fix (contents: write).
+    const permWarnings = core.warning.mock.calls.filter(
+      (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('contents: write'),
+    );
+    expect(permWarnings).toHaveLength(1);
+  });
 });

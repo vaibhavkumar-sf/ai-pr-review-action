@@ -48,6 +48,7 @@ export class PRCommenter {
   private currentCommentId: number | null = null;
   private authenticatedUser: string | null = null;
   private priorCompletedRun = false;
+  private threadPermissionWarned = false;
 
   constructor(
     private octokit: Octokit,
@@ -212,10 +213,32 @@ export class PRCommenter {
       await resolveReviewThreadById(this.octokit, threadId);
       return 1;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      core.debug(`Failed to resolve thread: ${msg}`);
+      this.reportThreadMutationFailure('resolve', err);
       return 0;
     }
+  }
+
+  /**
+   * Thread resolve/unresolve failures must not be invisible: GitHub requires
+   * PUSH access to (un)resolve PR conversations, so a workflow with the
+   * common `contents: read` gets "Resource not accessible by integration" on
+   * every attempt — stale threads silently stay open and regressed threads
+   * stay resolved. Warn ONCE per run with the exact remediation; anything
+   * else stays at debug (best-effort operations).
+   */
+  private reportThreadMutationFailure(operation: 'resolve' | 'reopen', err: unknown): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/resource not accessible/i.test(msg) && !this.threadPermissionWarned) {
+      this.threadPermissionWarned = true;
+      core.warning(
+        `GitHub token cannot ${operation} review threads ("Resource not accessible by integration"). ` +
+        'GitHub requires push access to resolve/unresolve PR conversations — grant the workflow ' +
+        '`permissions: contents: write` (alongside `pull-requests: write`). Until then, fixed findings’ ' +
+        'threads stay open and regressed threads stay resolved.',
+      );
+      return;
+    }
+    core.debug(`Failed to ${operation} thread: ${msg}`);
   }
 
   /**
@@ -294,8 +317,7 @@ export class PRCommenter {
           usedFindings.add(match);
           reopened++;
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          core.debug(`Failed to reopen thread: ${msg}`);
+          this.reportThreadMutationFailure('reopen', err);
         }
       }
     } catch (err) {
