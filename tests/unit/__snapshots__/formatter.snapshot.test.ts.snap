@@ -7,14 +7,9 @@ exports[`formatReviewComment snapshot renders a passing zero-findings comment in
 
 ### Summary
 
-| Severity | Count |
-|----------|-------|
-| 🛑 Critical | 0 |
-| 🔴 High | 0 |
-| 🟡 Medium | 0 |
-| 🟢 Low | 0 |
-| 💬 Nit | 0 |
-| **Total** | **0** |
+| 🛑 Critical | 🔴 High | 🟡 Medium | 🟢 Low | 💬 Nit | **Total** |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| 0 | 0 | 0 | 0 | 0 | **0** |
 
 > ✅ **Review passed** — no findings above the configured threshold.
 
@@ -66,22 +61,15 @@ exports[`formatReviewComment snapshot renders the full summary comment for a com
 
 ### Summary
 
-| Severity | Count |
-|----------|-------|
-| 🛑 Critical | 0 |
-| 🔴 High | 1 |
-| 🟡 Medium | 1 |
-| 🟢 Low | 0 |
-| 💬 Nit | 1 |
-| **Total** | **3** |
+| 🛑 Critical | 🔴 High | 🟡 Medium | 🟢 Low | 💬 Nit | **Total** |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| 0 | 1 | 1 | 0 | 1 | **3** |
 
 ### Findings by Category
 
-| Category | Count |
-|----------|-------|
-| 🔒 Security | 1 |
-| 📝 Code Quality | 1 |
-| 🧪 Testing | 1 |
+| 🔒 Security | 📝 Code Quality | 🧪 Testing |
+|:-:|:-:|:-:|
+| 1 | 1 | 1 |
 
 > ✅ **Review passed** — no findings above the configured threshold.
 
@@ -182,38 +170,21 @@ exports[`formatTrackingMetrics snapshot renders the tracking metrics section 1`]
 
 #### Findings by Severity — 3 total
 
-| Severity | Count |
-|----------|-------|
-| 🛑 Critical | 0 |
-| 🔴 High | 1 |
-| 🟡 Medium | 1 |
-| 🟢 Low | 0 |
-| 💬 Nit | 1 |
-| **Total** | **3** |
+| 🛑 Critical | 🔴 High | 🟡 Medium | 🟢 Low | 💬 Nit | **Total** |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| 0 | 1 | 1 | 0 | 1 | **3** |
 
 #### Findings by Category — 3 total
 
-| Category | Count |
-|----------|-------|
-| 🔒 Security | 1 |
-| 📝 Code Quality | 1 |
-| ⚡ Performance | 0 |
-| 🔍 Type Safety | 0 |
-| 🏗️ Architecture | 0 |
-| 🧪 Testing | 1 |
-| 🔌 API Design | 0 |
-| **Total** | **3** |
+| 🔒 Security | 📝 Code Quality | ⚡ Performance | 🔍 Type Safety | 🏗️ Architecture | 🧪 Testing | 🔌 API Design | **Total** |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 1 | 1 | 0 | 0 | 0 | 1 | 0 | **3** |
 
 #### Review Activity (this run)
 
-| Activity | Count |
-|----------|-------|
-| 🆕 New inline comments (this run) | 3 |
-| ♻️ Carried-over comments (already posted) | 1 |
-| ✅ Threads resolved (fixed in code) | 2 |
-| 💬 Replies posted (to human replies) | 1 |
-| ☑️ Threads resolved from valid replies | 1 |
-| 🤖 Bot comments hidden | 4 |
+| 🆕 New inline | ♻️ Carried-over | ✅ Resolved (fixed) | 💬 Replies posted | ☑️ Resolved (replies) | 🤖 Bot hidden |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| 3 | 1 | 2 | 1 | 1 | 4 |
 
 <sub>Reported to the Backstage tracker — each review run is stored as a separate row, so re-reviews of this PR are tracked individually.</sub>
 "
