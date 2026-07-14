@@ -38,6 +38,31 @@ describe('formatReviewComment snapshot', () => {
     );
     expect(comment).toMatchSnapshot();
   });
+
+  it('renders the final comment with the activity + AI-usage groups at the top', () => {
+    const merged = makeMerged();
+    const comment = formatReviewComment(merged, makeConfig(), makeContext(), 0, {
+      inlineCommentsNew: 2,
+      inlineCommentsExisting: 1,
+      staleThreadsResolved: 1,
+      threadsReopened: 0,
+      repliesPosted: 0,
+      threadsResolvedFromReplies: 0,
+      botCommentsHidden: 3,
+      aiCalls: 4,
+      aiInputTokens: 12000,
+      aiOutputTokens: 3400,
+      estimatedCostUsd: 0.0182,
+    });
+    // Metrics precede the findings — the header/meta line, then the metrics
+    // block, before any Critical & High or All Findings section.
+    expect(comment.indexOf('### 📊 Tracking Metrics')).toBeLessThan(comment.indexOf('Critical & High'));
+    expect(comment).toContain('#### Review Activity (this run)');
+    expect(comment).toContain('#### AI Usage (this run)');
+    expect(comment).not.toContain('### Summary');
+    expect(comment).not.toContain('Architecture Diagram');
+    expect(comment).toMatchSnapshot();
+  });
 });
 
 describe('formatTrackingMetrics snapshot', () => {

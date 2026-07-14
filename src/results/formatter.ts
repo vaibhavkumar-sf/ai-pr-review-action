@@ -1,5 +1,4 @@
 import { ActionConfig, AgentResult, Finding, MergedReviewResult, ReviewCategory, ReviewContext } from '../types';
-import { generateArchitectureDiagram } from './diagram-generator';
 import { RunActivityStats } from './backstage-reporter';
 import {
   CATEGORY_LABELS,
@@ -18,6 +17,7 @@ export function formatReviewComment(
   config: ActionConfig,
   context: ReviewContext,
   rerunNumber = 0,
+  activity?: RunActivityStats,
 ): string {
   const parts: string[] = [];
 
@@ -35,20 +35,11 @@ export function formatReviewComment(
   parts.push(`> **Model:** \`${config.anthropicModel}\` | **Mode:** \`${config.reviewMode}\`${profileMeta} | **Duration:** ${formatDuration(result.durationMs)}`);
   parts.push('');
 
-  // Severity summary — horizontal (metrics as columns) to minimize vertical space
-  parts.push('### Summary');
-  parts.push('');
-  parts.push(...horizontalTable(severityCells(result)));
-  parts.push('');
-
-  // Category breakdown — findings carry per-finding categories in both modes
-  const categoryCounts = countByCategory(result.findings);
-  if (categoryCounts.length > 0) {
-    parts.push('### Findings by Category');
-    parts.push('');
-    parts.push(...horizontalTable(categoryCounts.map(([category, count]) => [CATEGORY_LABELS[category], count])));
-    parts.push('');
-  }
+  // The tracking-metrics block is the single home for severity/category counts
+  // (no separate "Summary" table — it duplicated these). The activity + AI-usage
+  // groups only render once those stats exist (the final post); the first post
+  // shows the severity/category breakdown alone.
+  parts.push(formatTrackingMetrics(result, config, activity).trimStart());
 
   // Pass/fail status
   if (result.passed) {
@@ -149,20 +140,6 @@ export function formatReviewComment(
   parts.push('</details>');
   parts.push('');
 
-  // Architecture diagram (collapsible)
-  const diagram = generateArchitectureDiagram(context);
-  if (diagram) {
-    parts.push('<details>');
-    parts.push('<summary><strong>Architecture Diagram</strong></summary>');
-    parts.push('');
-    parts.push('```mermaid');
-    parts.push(diagram);
-    parts.push('```');
-    parts.push('');
-    parts.push('</details>');
-    parts.push('');
-  }
-
   // Strengths section (from agent summaries that scored high)
   const strengths = extractStrengths(result.agentResults);
   if (strengths.length > 0) {
@@ -195,21 +172,24 @@ export function formatReviewComment(
 }
 
 /**
- * Formats the "Backstage Tracking Metrics" section appended to the summary
- * comment after all comment-lifecycle actions complete. It mirrors exactly
- * what is POSTed to the Backstage tracker, rendered as three visually distinct
- * groups — severity counts, category counts, and this run's activity — so each
- * group reads against its own total instead of one flat metric list.
+ * Formats the "Tracking Metrics" section — the single home for the severity and
+ * category breakdowns (it replaced the old standalone Summary tables, which
+ * duplicated it). It mirrors exactly what is POSTed to the Backstage tracker,
+ * rendered as visually distinct groups so each reads against its own total.
+ *
+ * `activity` is only known once comment-lifecycle + AI work has run, so the
+ * Review Activity and AI Usage groups render only when it is supplied; the
+ * first (pre-activity) post shows just the severity/category breakdown.
  */
 export function formatTrackingMetrics(
   result: MergedReviewResult,
   config: ActionConfig,
-  activity: RunActivityStats,
+  activity?: RunActivityStats,
 ): string {
   const parts: string[] = [];
 
   parts.push('');
-  parts.push('### 📊 Backstage Tracking Metrics');
+  parts.push('### 📊 Tracking Metrics');
   parts.push('');
 
   // Group 1: findings by severity (sums to the total) — horizontal for compactness
@@ -230,34 +210,36 @@ export function formatTrackingMetrics(
   ]));
   parts.push('');
 
-  // Group 3: comment-lifecycle activity for THIS run (not finding counts)
-  parts.push('#### Review Activity (this run)');
-  parts.push('');
-  parts.push(...horizontalTable([
-    ['🆕 New inline', activity.inlineCommentsNew],
-    ['♻️ Carried-over', activity.inlineCommentsExisting],
-    ['✅ Resolved (fixed)', activity.staleThreadsResolved],
-    ['🔁 Reopened', activity.threadsReopened],
-    ['💬 Replies posted', activity.repliesPosted],
-    ['☑️ Resolved (replies)', activity.threadsResolvedFromReplies],
-    ['🤖 Bot hidden', activity.botCommentsHidden],
-  ]));
-  parts.push('');
-
-  // Group 4: AI usage for THIS run; USD appears only when model_pricing priced
-  // the models used (client-side estimate, never billing data).
-  parts.push('#### AI Usage (this run)');
-  parts.push('');
-  parts.push(...horizontalTable([
-    ['🧠 AI calls', activity.aiCalls],
-    ['📥 Input tokens', activity.aiInputTokens.toLocaleString('en-US')],
-    ['📤 Output tokens', activity.aiOutputTokens.toLocaleString('en-US')],
-    ['💰 Est. cost', activity.estimatedCostUsd === null ? 'n/a' : `$${activity.estimatedCostUsd.toFixed(4)}`],
-  ]));
-  parts.push('');
-  if (activity.estimatedCostUsd !== null) {
-    parts.push('<sub>Cost is estimated client-side from token counts × the configured `model_pricing` — not billing data.</sub>');
+  if (activity) {
+    // Group 3: comment-lifecycle activity for THIS run (not finding counts)
+    parts.push('#### Review Activity (this run)');
     parts.push('');
+    parts.push(...horizontalTable([
+      ['🆕 New inline', activity.inlineCommentsNew],
+      ['♻️ Carried-over', activity.inlineCommentsExisting],
+      ['✅ Resolved (fixed)', activity.staleThreadsResolved],
+      ['🔁 Reopened', activity.threadsReopened],
+      ['💬 Replies posted', activity.repliesPosted],
+      ['☑️ Resolved (replies)', activity.threadsResolvedFromReplies],
+      ['🤖 Bot hidden', activity.botCommentsHidden],
+    ]));
+    parts.push('');
+
+    // Group 4: AI usage for THIS run; USD appears only when model_pricing priced
+    // the models used (client-side estimate, never billing data).
+    parts.push('#### AI Usage (this run)');
+    parts.push('');
+    parts.push(...horizontalTable([
+      ['🧠 AI calls', activity.aiCalls],
+      ['📥 Input tokens', activity.aiInputTokens.toLocaleString('en-US')],
+      ['📤 Output tokens', activity.aiOutputTokens.toLocaleString('en-US')],
+      ['💰 Est. cost', activity.estimatedCostUsd === null ? 'n/a' : `$${activity.estimatedCostUsd.toFixed(4)}`],
+    ]));
+    parts.push('');
+    if (activity.estimatedCostUsd !== null) {
+      parts.push('<sub>Cost is estimated client-side from token counts × the configured `model_pricing` — not billing data.</sub>');
+      parts.push('');
+    }
   }
 
   if (config.postDataUrl) {

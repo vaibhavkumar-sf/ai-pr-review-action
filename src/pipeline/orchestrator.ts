@@ -10,7 +10,7 @@ import { startPrStateWatcher } from '../github/pr-state-watcher';
 import { InlineReviewer } from '../github/inline-reviewer';
 import { ReplyHandler } from '../github/reply-handler';
 import { parseDiff } from '../github/diff-parser';
-import { consolidateFindings, deduplicateFindings, formatReviewComment, formatTrackingMetrics, mergeResults } from '../results';
+import { consolidateFindings, deduplicateFindings, formatReviewComment, mergeResults } from '../results';
 import { reportRunOutcome, reportToBackstage, RunActivityStats } from '../results/backstage-reporter';
 import { estimateCost, parseModelPricing } from '../results/cost';
 import { appendToPRDescription } from './description-updater';
@@ -214,7 +214,10 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
     ? '\n\n<sub>🔁 Re-run focus: new inline comments are limited to critical/high findings and documentation suggestions; the totals above include all severities.</sub>'
     : '';
   const rerunNumber = isRerun ? commenter.rerunNumber() : 0;
-  const finalComment = formatReviewComment(merged, config, context, rerunNumber) + rerunNote + `\n${REVIEW_COMPLETE_MARKER}`;
+  // Suffix (re-run note + completion marker) is constant; only the metrics
+  // depth differs between the first post (no activity yet) and the final one.
+  const commentSuffix = rerunNote + `\n${REVIEW_COMPLETE_MARKER}`;
+  const finalComment = formatReviewComment(merged, config, context, rerunNumber) + commentSuffix;
   const { commentId, commentUrl } = await runPhase('Summary comment', { critical: true }, async () => {
     const posted = await commenter.postOrUpdateComment(finalComment);
     logger.info('Posted final review comment');
@@ -267,9 +270,13 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
     estimatedCostUsd: usageCost.estimatedCostUsd,
   };
 
-  // ── Phase 10: tracking metrics appended to the summary (best-effort) ──────
+  // ── Phase 10: re-post the summary with the full tracking metrics (best-effort) ──
+  // The metrics live near the top of the comment; the activity + AI-usage groups
+  // only exist now, so we re-render the whole comment rather than append.
   await runPhase('Tracking metrics', { critical: false }, async () => {
-    await commenter.postOrUpdateComment(finalComment + formatTrackingMetrics(merged, config, activity));
+    const finalCommentWithMetrics =
+      formatReviewComment(merged, config, context, rerunNumber, activity) + commentSuffix;
+    await commenter.postOrUpdateComment(finalCommentWithMetrics);
     return undefined;
   }, undefined);
 
