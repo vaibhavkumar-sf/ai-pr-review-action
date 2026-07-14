@@ -7,7 +7,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write  # push access is required to resolve/unresolve review threads
   pull-requests: write
 
 jobs:
