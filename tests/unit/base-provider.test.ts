@@ -59,6 +59,15 @@ class FakeProvider extends BaseProvider {
   protected delay(_ms: number): Promise<void> {
     return Promise.resolve();
   }
+  // Shrunk streaming-extension bounds so timeout tests run in milliseconds.
+  hardCapOverrideMs?: number;
+  stallWindowOverrideMs?: number;
+  protected streamingHardCapMs(timeoutMs: number): number {
+    return this.hardCapOverrideMs ?? super['streamingHardCapMs'](timeoutMs);
+  }
+  protected streamStallWindowMs(): number {
+    return this.stallWindowOverrideMs ?? super['streamStallWindowMs']();
+  }
   protected async listModels(): Promise<string[]> { return []; }
   protected curlHint(): string { return 'curl'; }
   protected isUnknownModelError(e: unknown): boolean { return /UNKNOWN_MODEL/.test(msg(e)); }
@@ -113,6 +122,51 @@ describe('BaseProvider engine', () => {
 
     await expect(provider.chat(MESSAGES, { ...OPTS, timeout: 50 })).rejects.toThrow(/timed out/);
     expect(provider.calls).toHaveLength(1);
+  });
+
+  it('extends past the deadline while the stream is still producing tokens', async () => {
+    const provider = new FakeProvider(['good'], 0, 0, ({ observers, signal }) =>
+      new Promise<ChatResponse>((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')));
+        // Stream a thinking delta every 20ms; the real answer lands at 250ms —
+        // far past the 60ms timeout, inside the 500ms hard cap.
+        const drip = setInterval(() => observers.onThinking?.('…'), 20);
+        setTimeout(() => { clearInterval(drip); resolve(OK); }, 250);
+      }));
+    provider.hardCapOverrideMs = 500;
+    provider.stallWindowOverrideMs = 100;
+
+    const res = await provider.chat(MESSAGES, { ...OPTS, timeout: 60 });
+    expect(res.content).toBe('ok');
+  });
+
+  it('aborts an extended stream at the hard cap even while it keeps producing', async () => {
+    let drip: ReturnType<typeof setInterval> | undefined;
+    const provider = new FakeProvider(['good'], 0, 0, ({ observers, signal }) =>
+      new Promise<ChatResponse>((_, reject) => {
+        signal.addEventListener('abort', () => { clearInterval(drip); reject(new Error('aborted')); });
+        drip = setInterval(() => observers.onThinking?.('…'), 20); // never finishes
+      }));
+    provider.hardCapOverrideMs = 300;
+    provider.stallWindowOverrideMs = 100;
+
+    await expect(provider.chat(MESSAGES, { ...OPTS, timeout: 60 }))
+      .rejects.toThrow(/streaming hard cap/);
+  });
+
+  it('aborts an extended stream that goes silent past the stall window', async () => {
+    const provider = new FakeProvider(['good'], 0, 0, ({ observers, signal }) =>
+      new Promise<ChatResponse>((_, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')));
+        // Streams until 100ms, then silence — stalled, never resolves.
+        const drip = setInterval(() => observers.onThinking?.('…'), 20);
+        setTimeout(() => clearInterval(drip), 100);
+      }));
+    provider.hardCapOverrideMs = 5000; // far away: the stall must trigger, not the cap
+    provider.stallWindowOverrideMs = 80;
+
+    await expect(provider.chat(MESSAGES, { ...OPTS, timeout: 60 }))
+      .rejects.toThrow(/stream went silent/);
   });
 
   it('retries a transient/rate-limit error then succeeds', async () => {

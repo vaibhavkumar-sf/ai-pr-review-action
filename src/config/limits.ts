@@ -432,3 +432,24 @@ export const KROKI_MERMAID_URL = 'https://kroki.io/mermaid/svg';
 
 /** model_pricing prices are quoted in USD per MILLION tokens (industry convention). */
 export const USD_PER_MILLION_TOKENS_DIVISOR = 1_000_000;
+
+// ─── Progress-aware timeout ─────────────────────────────────────────────────
+
+/**
+ * Absolute per-attempt ceiling for a call that is STILL STREAMING when its
+ * configured timeout expires. A stream that keeps producing tokens is working,
+ * not hung — killing it at the base timeout threw away 137k thinking chars in
+ * production. The configured agent_timeout still applies in full to silent
+ * (no-token) calls, and a larger agent_timeout raises this cap too.
+ */
+export const STREAMING_TIMEOUT_HARD_CAP_MS = 30 * 60 * 1000;
+
+/**
+ * How recently the stream must have produced a delta to count as "still
+ * working" once the base timeout has expired. Past this silence the call is
+ * treated as stalled and aborted.
+ */
+export const STREAM_STALL_WINDOW_MS = 60 * 1000;
+
+/** Fastest re-check cadence for the timeout watchdog (floor, not fixed rate). */
+export const TIMEOUT_WATCHDOG_MIN_INTERVAL_MS = 50;

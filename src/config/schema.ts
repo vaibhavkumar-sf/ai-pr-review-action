@@ -340,7 +340,7 @@ export const INPUTS: readonly InputSpec[] = [
     type: 'number',
     default: '800',
     group: 'Advanced',
-    description: 'Timeout in seconds for each review agent AI call. 800 leaves headroom for slow endpoint spells: glm-5.2 streams all thinking before writing findings, and a timeout mid-thought yields 0 findings',
+    description: 'Timeout in seconds for each review agent AI call. Progress-aware: it applies in full to silent calls (no tokens = hung endpoint), but a call still streaming tokens at the deadline keeps running while deltas keep arriving — up to a 30-minute hard cap (or this value if set higher). A stream silent for 60s past the deadline is aborted as stalled',
   },
   {
     name: 'max_retries',

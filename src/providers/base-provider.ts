@@ -12,8 +12,11 @@ import {
   RATE_LIMIT_MAX_TOTAL_WAIT_MS,
   RATE_LIMIT_RETRY_DELAY_MAX_MS,
   RATE_LIMIT_RETRY_DELAY_MS,
+  STREAM_STALL_WINDOW_MS,
+  STREAMING_TIMEOUT_HARD_CAP_MS,
   THINKING_FLOOR_TOKENS,
   THINKING_SNIPPET_CHARS,
+  TIMEOUT_WATCHDOG_MIN_INTERVAL_MS,
   TRANSIENT_BACKOFF_BASE_MS,
 } from '../config/limits';
 
@@ -510,10 +513,40 @@ export abstract class BaseProvider implements AIProvider {
       let timedOut = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       const abortController = new AbortController();
-      const timeoutId = setTimeout(() => {
+      // Progress-aware timeout: the configured timeout applies in full to a
+      // SILENT call (no tokens = hung endpoint), but a stream that is still
+      // producing deltas when the deadline hits is working, not stuck — it
+      // keeps running while deltas keep arriving, up to the streaming hard
+      // cap. 0 = no delta received yet.
+      let lastProgressAt = 0;
+      let extensionLogged = false;
+      const hardCapMs = this.streamingHardCapMs(options.timeout);
+      const stallWindowMs = this.streamStallWindowMs();
+      let watchdog: ReturnType<typeof setTimeout>;
+      const checkDeadline = (): void => {
+        const now = Date.now();
+        const streaming = lastProgressAt > 0 && now - lastProgressAt < stallWindowMs;
+        if (streaming && now - attemptStart < hardCapMs) {
+          if (!extensionLogged) {
+            extensionLogged = true;
+            core.info(
+              `  ⏳ ${model}: ${timeoutSec}s deadline reached but the stream is still producing output — `
+              + `extending while progress continues (stall window ${Math.round(stallWindowMs / 1000)}s, `
+              + `hard cap ${Math.round(hardCapMs / 1000)}s)`,
+            );
+          }
+          // Re-check exactly when the earlier of stall-or-cap could trip.
+          const nextMs = Math.max(
+            TIMEOUT_WATCHDOG_MIN_INTERVAL_MS,
+            Math.min(lastProgressAt + stallWindowMs, attemptStart + hardCapMs) - now,
+          );
+          watchdog = setTimeout(checkDeadline, nextMs);
+          return;
+        }
         timedOut = true;
         abortController.abort();
-      }, options.timeout);
+      };
+      watchdog = setTimeout(checkDeadline, options.timeout);
       const elapsedSec = (): number => Math.round((Date.now() - attemptStart) / 1000);
 
       try {
@@ -554,12 +587,13 @@ export abstract class BaseProvider implements AIProvider {
           thinkingBudget,
           {
             onThinking: (delta) => {
+              lastProgressAt = Date.now();
               thinkingChars += delta.length;
               if (thinkingSnippet.length < THINKING_SNIPPET_CHARS) {
                 thinkingSnippet += delta.slice(0, THINKING_SNIPPET_CHARS - thinkingSnippet.length);
               }
             },
-            onText: (delta) => { textChars += delta.length; },
+            onText: (delta) => { lastProgressAt = Date.now(); textChars += delta.length; },
             onToolUse: (name) => { core.info(`  ⏳ ${model}: requesting tool ${name} [${elapsedSec()}s/${timeoutSec}s]`); },
           },
           abortController.signal,
@@ -600,10 +634,15 @@ export abstract class BaseProvider implements AIProvider {
           const got = textChars > 0
             ? `${textChars} chars of output (+${thinkingChars} thinking) then stalled`
             : thinkingChars > 0
-              ? `${thinkingChars} thinking chars but no findings text`
+              ? `${thinkingChars} thinking chars then stalled`
               : 'no output at all';
+          const cause = attemptSec >= Math.round(hardCapMs / 1000)
+            ? `hit the ${Math.round(hardCapMs / 1000)}s streaming hard cap`
+            : lastProgressAt > 0
+              ? `stream went silent for ${Math.round(stallWindowMs / 1000)}s`
+              : `no first token within ${timeoutSec}s`;
           lastError = new Error(
-            `timed out after ${timeoutSec}s — ${model} produced ${got}. `
+            `timed out after ${attemptSec}s (${cause}) — ${model} produced ${got}. `
             + `The model/endpoint is too slow for this input: raise agent_timeout, `
             + `shrink the PR, or lower thinking_budget/max_tokens.`,
           );
@@ -688,7 +727,7 @@ export abstract class BaseProvider implements AIProvider {
         );
         break;
       } finally {
-        clearTimeout(timeoutId);
+        clearTimeout(watchdog);
         if (heartbeat) clearInterval(heartbeat);
       }
     }
@@ -724,5 +763,18 @@ export abstract class BaseProvider implements AIProvider {
   /** Overridable in tests so backoff schedules run instantly. */
   protected delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Ceiling for a still-streaming call once its base timeout expired. A
+   * user-configured timeout larger than the cap wins. Overridable in tests.
+   */
+  protected streamingHardCapMs(timeoutMs: number): number {
+    return Math.max(timeoutMs, STREAMING_TIMEOUT_HARD_CAP_MS);
+  }
+
+  /** Max stream silence tolerated past the base timeout. Overridable in tests. */
+  protected streamStallWindowMs(): number {
+    return STREAM_STALL_WINDOW_MS;
   }
 }
