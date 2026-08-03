@@ -85,7 +85,7 @@ src/
   utils/
     logger.ts               debug gating + writeJobSummary (feature code logs via @actions/core)
     json.ts                 extractJsonObject
-    mermaid.ts              the ONE sanitizer + Kroki validation
+    mermaid.ts              the ONE sanitizer + validation (local mermaid.js, Kroki fallback)
     imports.ts              the ONE import extractor (specifiers + named symbols)
     text.ts                 addLineNumbers
 tests/
@@ -163,7 +163,9 @@ pipeline ──▶ AIProvider (interface)
 - **Model-chain fallback + latching**: `anthropic_model` may be a comma-separated
   chain; unknown-model errors advance to the next entry; the first working model
   is latched for the rest of the run (`getResolvedModel()`).
-- **Retry/backoff**: rate-limits honor `Retry-After` (else 30s steps); transient
+- **Retry/backoff**: rate-limits honor `Retry-After` (else 10s escalating ×1.5 to a
+  120s ceiling, up to a 5h budget **per AI call** — GitHub's 6h job limit is the real
+  backstop); transient
   errors (429/500/502/503/529, network) use exponential backoff; timeouts are
   terminal (a 10-minute agent call should not silently double).
 - **Streaming heartbeat**: progress logged every 20s so long calls are visibly alive.
@@ -199,7 +201,7 @@ gets a `::group::`-wrapped log section with duration and a declared criticality:
 | Summary comment | critical | rethrow — a review nobody can see is a failed review |
 | Reply handling / inline comments / metrics / description / diagrams | best-effort | warn, continue |
 | Outputs, Backstage report, job summary | best-effort | warn, continue |
-| Fail threshold (`fail_on_critical` / `fail_on_high`) | — | setFailed by configuration |
+| Fail threshold (`fail_on_critical` + `fail_threshold`) | — | setFailed by configuration |
 
 A top-level catch in `runReview` guarantees Backstage receives a `failed` report
 (with the error reason) for any unhandled critical failure before the action exits.

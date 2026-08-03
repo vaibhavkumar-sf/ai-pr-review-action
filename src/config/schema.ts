@@ -331,7 +331,7 @@ export const INPUTS: readonly InputSpec[] = [
     type: 'boolean',
     default: 'true',
     group: 'Diagrams',
-    description: 'Generate AI Mermaid diagrams (validated via Kroki.io, rendered natively by GitHub) in the PR description',
+    description: 'Generate AI Mermaid diagrams in the PR description (validated locally with mermaid.js, Kroki.io as fallback; rendered natively by GitHub)',
   },
 
   // ─── Advanced ───
