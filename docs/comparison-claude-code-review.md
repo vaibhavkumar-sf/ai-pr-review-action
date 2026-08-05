@@ -237,6 +237,14 @@ jobs:
           claude_args: --model glm-5.2
 ```
 
+**A second, unrelated blocker found by actually running it.** We piloted this configuration on `sourcefuse/telescope-health-backend-api` (PR #4182). The first run failed **before reaching the AI endpoint at all**:
+
+> `App token exchange failed: 401 Unauthorized - Claude Code is not installed on this repository. Please install the Claude Code GitHub App at https://github.com/apps/claude`
+
+With no `github_token` supplied, the action requests a GitHub OIDC token and exchanges it for a **Claude GitHub App** token — so out of the box it requires an org admin to install Anthropic's GitHub App, independently of which model you point it at. Passing `github_token: ${{ secrets.GITHUB_TOKEN }}` explicitly skips that exchange. Worth knowing before anyone estimates "we could switch in an afternoon."
+
+Usefully, that same failing run **confirmed the GLM wiring is correct** — its logged environment showed `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` and all three `ANTHROPIC_DEFAULT_*_MODEL=glm-5.2` values arriving intact.
+
 **One further catch for the `code-review` plugin specifically.** Its pipeline requests Haiku, Sonnet and Opus subagents by tier name (§3.3). On a GLM endpoint those aliases must each be remapped with `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL`, or the tiering silently misroutes.
 
 **Bottom line for the decision.** Provider portability is *achievable* on their action but is undocumented, unsupported, dependent on an env-var allow-list that Anthropic can change in any release, and requires knowing that the vendor's own documented variable is the wrong one. Ours takes `anthropic_auth_token` and `anthropic_base_url` as **first-class, validated, documented inputs**, adds a second `openai` wire dialect for endpoints that are not Anthropic-compatible, and supports a comma-separated model fallback chain. The capability gap is narrow; the **supportability** gap is not.
