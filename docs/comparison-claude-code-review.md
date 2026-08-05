@@ -111,7 +111,7 @@ Columns: **Ours** · **OSS** = `claude-code-action` DIY prompt · **Plugin** = `
 | Inline comments on diff lines | ✅ | ✅ (MCP tool, must be allow-listed + prompt-instructed) | ✅ | ✅ | ✅ |
 | Committable code suggestions | ✅ `suggestion` blocks, validated for no-ops/mismatch | 🟡 prompt-dependent | ✅ small fixes only, by rule | ❌ ("Fix this" links instead) | ✅ |
 | One summary comment, updated in place | ✅ + old runs minimized, never deleted | 🟡 `use_sticky_comment` | 🟡 only when zero issues found | ✅ review body + check run + annotations | ✅ PR overview comment |
-| **Re-run awareness** (new inline comments narrowed after the first review) | ✅ "Re-run #N", critical/high + docs only | ❌ stateless per run | ❌ aborts entirely if Claude already commented | 🟡 tunable via REVIEW.md "convergence" | ❌ |
+| **Re-run awareness** (new inline comments narrowed after the first review) | ✅ "Re-run #N", critical/high + docs only | ❌ stateless per run | ❌ **reviews a PR exactly once** — verified: a second run on a changed diff posted nothing | 🟡 tunable via REVIEW.md "convergence" | ❌ |
 | Never re-posts a comment the developer already resolved | ✅ | 🟡 stateless — likely to repeat | n/a (aborts instead) | ✅ | **❌ documented behaviour** — *"may repeat the same comments again, even if they have been dismissed … or downvoted"* |
 | Auto-resolve threads when fixed | ✅ | ❌ | ❌ | ✅ (push-triggered mode) | ❌ |
 | **Reopen resolved threads on regression** (critical/high, never over a human justification) | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -261,7 +261,20 @@ The plugin declares its required tools in its own command frontmatter, but **tha
 
 **What attempt 2 does prove:** the GLM wiring in this section is correct. The SDK options and init event both logged `"model": "glm-5.2"`, and the run consumed 38 turns against our z.ai endpoint. **Anthropic's official reviewer does run on our GLM plan.**
 
-**Two figures worth carrying into the cost discussion.** 17.7 minutes for a single review of a 117-line diff — against a measured median of 9.4 minutes for our own action (§4.2) and Anthropic's own 20-minute average for the managed service. And the `total_cost_usd: 3.25` the SDK reports is computed at *Claude* list prices; on our flat GLM plan the real marginal cost is quota, not dollars — but 38 turns for one small diff is a useful signal of how much more an unbounded agent loop consumes than our single-pass design.
+**Attempt 3 — a real review, but a degraded one.** Granting the plugin's own frontmatter tool list produced a genuine, good-quality review comment. It correctly verified the workflow's input validation, confirmed no script-injection vector, and caught a real `CLAUDE.md` violation (a missing mandatory JIRA ticket on the commits). But denials stayed at 21: `Task` was not in the list, so **the plugin's four parallel review agents and its per-issue validation subagents could never spawn.** What ran was a single-agent review wearing the pipeline's name. Granting `Task,Read,Glob,Grep,TodoWrite` dropped denials to 6.
+
+**Attempt 4 — the finding that matters most: it will not review the same PR twice.** With the full toolset granted and a changed diff, the run completed successfully in 3.6 minutes, 20 turns — and **posted nothing at all**. This is consistent with the plugin's documented step-1 skip gate, which aborts the entire review when *"Claude has already commented on this PR."*
+
+The operational consequence is severe and easy to miss: **the plugin reviews a pull request exactly once.** Push fixes in response to its feedback and the next run exits quietly with a green check. There is no re-review, no thread resolution, no convergence — the behaviour §3.3 describes, now confirmed on a live repository. For our push-heavy workflow, where 27% of runs are superseded by a further push (§4.2), a reviewer that only ever sees the first commit of a PR is not a viable primary.
+
+| Attempt | Tools granted | Result | Denials | Turns | Duration |
+|---|---|---|---:|---:|---:|
+| 1 | — | failed: Claude GitHub App not installed | — | — | — |
+| 2 | none | **green check, review silently discarded** | 21 | 38 | 17.7 min |
+| 3 | plugin frontmatter | review posted, but single-agent (no `Task`) | 21 | 42 | 13.2 min |
+| 4 | + `Task,Read,Glob,Grep` | **nothing posted — already reviewed once** | 6 | 20 | 3.6 min |
+
+**Figures worth carrying into the cost discussion.** 13–18 minutes for a single review of a 117-line diff, against a measured median of 9.4 minutes for our own action (§4.2) and Anthropic's 20-minute average for the managed service. The `total_cost_usd` the SDK reports ($0.72–3.25 per attempt) is computed at *Claude* list prices; on our flat GLM plan the real marginal cost is quota, not dollars — but 38–42 turns for one small diff shows how much more an unbounded agent loop consumes than our single-pass design.
 
 **One further catch for the `code-review` plugin specifically.** Its pipeline requests Haiku, Sonnet and Opus subagents by tier name (§3.3). On a GLM endpoint those aliases must each be remapped with `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL`, or the tiering silently misroutes.
 
@@ -284,7 +297,7 @@ The plugin declares its required tools in its own command frontmatter, but **tha
 
 **Deliberately narrow scope.** Verbatim: *"**CRITICAL: We only want HIGH SIGNAL issues.**"* It flags only code that will fail to compile/parse, code that will definitely produce wrong results, and unambiguous CLAUDE.md violations you can quote. It explicitly does **not** flag code style, input-dependent issues, or subjective improvements — and has **no security, performance or test-coverage dimension** unless your CLAUDE.md demands one.
 
-**Where it falls down for our use case.** No severity taxonomy at all. No thread resolution, no cross-run dedup, no re-run focus — its entire re-run strategy is step 1's blunt "abort if Claude already commented." It reads `CLAUDE.md` but **not** `REVIEW.md`. Without `--comment` it posts nothing at all.
+**Where it falls down for our use case.** No severity taxonomy at all. No thread resolution, no cross-run dedup, no re-run focus — its entire re-run strategy is step 1's blunt "abort if Claude already commented." **We confirmed this on a live repository** (§3.2.1, attempt 4): after it had reviewed a PR once, a subsequent run against a changed diff exited successfully having posted nothing. It reads `CLAUDE.md` but **not** `REVIEW.md`. Without `--comment` it posts nothing at all. And its required tools are not granted automatically — omit them and the review is silently discarded behind a green check.
 
 **⚠️ Its own README is stale.** The README documents 0–100 confidence scoring with an 80 threshold and a git-blame history agent. Neither exists in the shipped command file — agent 4 is a second Opus bug hunter, and `git` is not even in its allowed tools. If anyone cites "confidence scoring" as a plugin feature, that claim comes from stale documentation.
 
