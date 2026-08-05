@@ -2,7 +2,7 @@
 
 > **Decision brief.** Evaluates every AI pull-request review option realistically available to us — our in-house GitHub Action, Anthropic's five review offerings, and GitHub Copilot code review — and recommends which to run org-wide.
 >
-> **Prepared 2026-08-03.** Every external claim is sourced from the vendor's own primary documentation, with URLs in Appendix C and the fetch date on each. Claims that could not be verified from a primary source are labelled **[unverified]** in-line rather than asserted. Our own figures are traced to the file and line that produce them.
+> **Prepared 2026-08-05; external sources and production telemetry both current to 2026-08-03.** Every external claim is sourced from the vendor's own primary documentation, with URLs in Appendix C and the fetch date on each. Claims that could not be verified from a primary source are labelled **[unverified]** in-line rather than asserted. Our own figures are traced to the file and line that produce them.
 
 ---
 
@@ -14,9 +14,9 @@ There is no single competitor to compare against. Anthropic ships **five** disti
 
 | Option | Weighted score /100 | Cost per review | Fits our stack today |
 |---|:---:|:---|:---:|
-| **Our AI PR Review Action** | **88** | **$0 marginal** on the existing GLM Coding Pro plan (~$80/mo flat) | ✅ |
-| Managed "Code Review" (Anthropic SaaS) | 64 | $15–25 | ❌ Team/Enterprise, Anthropic-billed, research preview, no ZDR |
-| `code-review` plugin via claude-code-action | 55 | your API spend (~$15–25 observed) | ⚠️ partial |
+| **Our AI PR Review Action** | **88** | **\$0 marginal** on the existing GLM Coding Pro plan (~\$80/mo flat) | ✅ |
+| Managed "Code Review" (Anthropic SaaS) | 64 | \$15–25 | ❌ Team/Enterprise, Anthropic-billed, research preview, no ZDR |
+| `code-review` plugin via claude-code-action | 55 | your API spend (~\$15–25 observed) | ⚠️ partial |
 | `anthropics/claude-code-action` (DIY prompt) | 54 | your API spend | ⚠️ partial |
 | GitHub Copilot code review | 53 | **undisclosed** — seat + AI credits + Actions minutes | ⚠️ partial |
 
@@ -26,7 +26,9 @@ There is no single competitor to compare against. Anthropic ships **five** disti
 
 2. **Only our action controls re-run noise.** Copilot's docs state plainly that on re-review *"Copilot may repeat the same comments again, even if they have been dismissed with the 'Resolve conversation' button or downvoted."* The `code-review` plugin's entire re-run strategy is to abort if Claude has already commented. Anthropic's managed service handles it, but only via prompt tuning you write yourself in `REVIEW.md`.
 
-3. **Cost is the widest gap and it runs in our favour.** We pay a flat ~$80/month for effectively unlimited review volume. The managed service is $15–25 *per review*. Copilot's per-review cost is not published at all — GitHub does not disclose the model, the credits, or the Actions minutes consumed, so cost per PR is not forecastable from public data.
+3. **Cost is the widest gap and it runs in our favour — at measured volume.** Production telemetry across 6 repositories over 18 weeks shows **~2,150 workflow runs per month, ~1,500 of them completed reviews** (§4.2). We pay a flat **~\$80/month** for that, on self-hosted runners that bill no GitHub Actions minutes. The same work through Anthropic's managed service at \$15–25 per review would cost **\$270,000–450,000 per year.** Copilot's per-review cost is not published at all — GitHub does not disclose the model, the credits, or the Actions minutes consumed, so cost per PR is not forecastable from public data.
+
+**This is a production system, not a pilot.** 2,768 runs since April, ~499 per week sustained since mid-July, peak 196 runs in a single day. The reliability picture is honest rather than flattering: 60.8% of runs complete successfully, 26.6% are cancelled by superseding pushes, 6.9% fail, and median review latency is 9.4 minutes. §6 and §7 name the three fixes that address it.
 
 **Honest counterweight:** Anthropic and GitHub staff their products; we maintain ours. Three competitors ship a **false-positive verification pass** we do not have. Copilot ships **suggestion-acceptance-rate metrics** that are genuinely better than our tracking. §7 covers how to close both gaps without changing platform.
 
@@ -46,7 +48,7 @@ The question "why not just use Claude/Copilot for code review?" contains a hidde
 | 6 | **`/code-review ultra` (ultrareview)** | Cloud multi-agent review with independent verification | Anthropic sandbox | research preview |
 | 7 | **GitHub Copilot code review** | GitHub's reviewer, driven by repository rulesets | **GitHub Actions runners** (ephemeral) | **GA** (Medium effort level still preview) |
 
-**Adjacent, and important to the argument:** **GitHub Code Quality** — GA since 2026-07-20, $10/active committer/month plus usage. It is the only GitHub product that can genuinely block a merge on quality grounds, and it does so *only* on deterministic CodeQL findings. Profile in §3.7.
+**Adjacent, and important to the argument:** **GitHub Code Quality** — GA since 2026-07-20, \$10/active committer/month plus usage. It is the only GitHub product that can genuinely block a merge on quality grounds, and it does so *only* on deterministic CodeQL findings. Profile in §3.7.
 
 ### 1.1 What "reinventing the wheel" would actually mean
 
@@ -128,7 +130,7 @@ Columns: **Ours** · **OSS** = `claude-code-action` DIY prompt · **Plugin** = `
 | **Central tracking: every run + every finding POSTed** | ✅ ~50 fields + all findings, incl. skipped/failed/cancelled runs | ❌ | ❌ | 🟡 Anthropic-hosted dashboard | ❌ no findings export API; standard PR-comment REST works |
 | Aggregate analytics dashboard | 🟡 Backstage (we build it) | ❌ | ❌ | ✅ hosted (`claude.ai/analytics/code-review`) | ✅ metrics API incl. **suggestion acceptance rate** |
 | Token + estimated cost per run, in the PR comment | ✅ | ❌ | ❌ | 🟡 in Anthropic's dashboard, not the PR | ❌ per-review cost not disclosed at all |
-| **Merge gating** | ✅ opt-in (`fail_on_critical` + `fail_threshold` → failed check run) | 🟡 buildable from structured output | ❌ | 🟡 neutral by design, **but** a `bughunter-severity` JSON in the check run enables DIY gating | ❌ needs **GitHub Code Quality** ($10/committer) — and even there, AI findings never gate |
+| **Merge gating** | ✅ opt-in (`fail_on_critical` + `fail_threshold` → failed check run) | 🟡 buildable from structured output | ❌ | 🟡 neutral by design, **but** a `bughunter-severity` JSON in the check run enables DIY gating | ❌ needs **GitHub Code Quality** (\$10/committer) — and even there, AI findings never gate |
 | Formal PR approval / request-changes | ❌ | ❌ *"Claude cannot approve pull requests"* | ❌ | ❌ by design | ❌ *"always leaves a 'Comment' review"* |
 
 > **Note on our own gating, stated plainly:** our inline comments are submitted through the Reviews API with `event: 'COMMENT'` (`src/github/inline-reviewer.ts:110,322`). We never send `APPROVE` or `REQUEST_CHANGES` either. Our enforcement is the **check run** — `fail_on_critical` calls `setFailed`, and branch protection must be configured to require that check. This is a real difference from the others (they have no gate at all), but it is a check-run gate, not a review verdict.
@@ -149,8 +151,9 @@ Columns: **Ours** · **OSS** = `claude-code-action` DIY prompt · **Plugin** = `
 | Pre-flight AI-endpoint health probe | ✅ | ❌ | ❌ | n/a | n/a |
 | Skip oversized PRs instead of timing out | ✅ `max_files_to_review` (default 50) | ❌ | ❌ | 🟡 spend-cap comment | 🟡 [unverified] no published limit |
 | Configurable file include/exclude filters | ✅ 17 built-in defaults, user patterns append | 🟡 via workflow `paths:` / prompt | ❌ | ✅ REVIEW.md skip rules | 🟡 content exclusions (Business/Enterprise), plus a fixed non-configurable exclusion list |
+| Consumes billable GitHub Actions minutes | ✅ **no** — we run on SourceFuse self-hosted runners | 🟡 depends on your runners | 🟡 | ✅ no (runs on Anthropic infra) | ❌ **yes**, charged to the repository on private repos since 2026‑06‑01 |
 | Data residency | ✅ our runners + our chosen endpoint | ✅ your runners | ✅ | ❌ Anthropic infra; **unavailable with ZDR** | 🟡 US/EU on GHEC-with-data-residency, **+10% AI credit cost** |
-| Published latency | ~3 min on the one instrumented run we have | varies with the agent loop | varies | *"20 minutes on average"* | *"usually … less than 30 seconds"* (pre-dates the agentic architecture; no figure published for Medium effort) |
+| Latency | **median 9.4 min, 11 min for successful reviews, p95 37 min** — measured across 2,404 production runs | varies with the agent loop | varies | *"20 minutes on average"* | *"usually … less than 30 seconds"* (pre-dates the agentic architecture; no figure published for Medium effort) |
 
 ### 2.6 Setup, triggers & ownership
 
@@ -190,6 +193,8 @@ Two guards short-circuit cleanly rather than failing: `> max_files_to_review` (d
 
 **Governance.** 23 named action outputs; a Backstage POST carrying ~50 fields plus every finding, sent on **every** run including skipped, failed and cancelled ones; token/cost figures printed in the PR comment itself; optional merge gating.
 
+**Where it runs.** A Docker action on **SourceFuse self-hosted runners**, calling our own AI endpoint. Two consequences: code and prompts never leave infrastructure we control, and the action consumes **no billable GitHub Actions minutes** — unlike Copilot code review, whose agentic capabilities run on Actions runners billed to the repository.
+
 **What it deliberately does not do.** No code writing, no commits, no PR creation. No `@mention` interactivity — human replies are processed on the *next* run, not in real time. No formal approve/request-changes. No false-positive verification pass; our prompts explicitly bias toward flagging ("When in doubt, FLAG IT"). No feedback learning. TypeScript/JavaScript-first — the compiler engine, skeletons, barrels and framework depth are TS/JS-shaped; other languages get diff plus raw file text. No Bedrock/Vertex/Foundry. No hosted dashboard (Backstage is ours to build). Docker action ⇒ Linux runners only. State lives entirely in PR comment markers — delete the comments and it forgets.
 
 ### 3.2 `anthropics/claude-code-action` (OSS)
@@ -223,7 +228,7 @@ Two guards short-circuit cleanly rather than failing: `> max_files_to_review` (d
 
 **⚠️ Its own README is stale.** The README documents 0–100 confidence scoring with an 80 threshold and a git-blame history agent. Neither exists in the shipped command file — agent 4 is a second Opus bug hunter, and `git` is not even in its allowed tools. If anyone cites "confidence scoring" as a plugin feature, that claim comes from stale documentation.
 
-**Observed cost in the wild:** Storybook's public workflow gates it behind a label with the comment *"Claude Code reviews are estimated to cost $15-25. use only when necessary and only internally."*
+**Observed cost in the wild:** Storybook's public workflow gates it behind a label with the comment *"Claude Code reviews are estimated to cost \$15-25. use only when necessary and only internally."*
 
 ### 3.4 Managed "Code Review" (Anthropic SaaS)
 
@@ -237,7 +242,7 @@ Two guards short-circuit cleanly rather than failing: `> max_files_to_review` (d
 
 **Merge gating.** *"The check run always completes with a neutral conclusion so it never blocks merging."* But it emits a machine-readable `<!-- bughunter-severity: {"normal":2,"nit":1,"pre_existing":0} -->` marker in the check-run output, so a team can build its own gate with `gh api` + `jq`.
 
-**Cost and limits.** *"Each review averages $15-25 in cost, scaling with PR size, codebase complexity, and how many issues require verification"* — billed through usage credits, **not** covered by any subscription plan, and charged by Anthropic even for orgs otherwise on Bedrock or Google Cloud. Per-repo monthly spend caps exist; on breach, reviews are skipped with a PR comment until the next billing period. Runs are *"best-effort. A failed run never blocks your PR, but it also doesn't retry on its own"* — and GitHub's Re-run button does not retrigger it.
+**Cost and limits.** *"Each review averages \$15-25 in cost, scaling with PR size, codebase complexity, and how many issues require verification"* — billed through usage credits, **not** covered by any subscription plan, and charged by Anthropic even for orgs otherwise on Bedrock or Google Cloud. Per-repo monthly spend caps exist; on breach, reviews are skipped with a PR comment until the next billing period. Runs are *"best-effort. A failed run never blocks your PR, but it also doesn't retry on its own"* — and GitHub's Re-run button does not retrigger it.
 
 **Blockers for us:** research preview, **Team/Enterprise subscriptions only**, and **not available for organizations with Zero Data Retention enabled**. [unverified] The docs publish no supported-language list, repo-size ceiling, or maximum diff size.
 
@@ -247,7 +252,7 @@ Two developer-workstation tools, included because they change the "is there a fr
 
 **`/code-review` (local).** Free on any plan, bundled into Claude Code. Reviews your branch's commits ahead of upstream plus uncommitted changes. `--fix` applies findings to the working tree; **`--comment` posts findings as inline PR comments**. Effort levels `low` → `max` trade false positives against coverage. Reads `CLAUDE.md` but **not** `REVIEW.md`. Runs as a background subagent (v2.1.218+) — note that `--fix` edits land outside session checkpoints, so `/rewind` will not undo them.
 
-**`/code-review ultra` (ultrareview).** Research preview. A larger fleet of reviewer agents in a remote sandbox, where *"every reported finding is independently reproduced and verified."* Takes 5–10 minutes. Limits: **500 changed files and 8,000 changed lines**. Pricing: **3 free runs one-time for Pro/Max, none for Team/Enterprise**, then **$5–25 per review** in usage credits — and a run you stop early still consumes a free run.
+**`/code-review ultra` (ultrareview).** Research preview. A larger fleet of reviewer agents in a remote sandbox, where *"every reported finding is independently reproduced and verified."* Takes 5–10 minutes. Limits: **500 changed files and 8,000 changed lines**. Pricing: **3 free runs one-time for Pro/Max, none for Team/Enterprise**, then **\$5–25 per review** in usage credits — and a run you stop early still consumes a free run.
 
 **Two disqualifiers for CI use:** it **cannot post to a PR and cannot open a fix branch** (the docs redirect you to the managed service for that), and it **silently downgrades to a local review** on Bedrock, Google Cloud, Microsoft Foundry, or any ZDR organization — no error, just a quieter review.
 
@@ -278,11 +283,11 @@ Two developer-workstation tools, included because they change the "is there a fr
 
 Included because it is the likely response to "GitHub already gates quality for us."
 
-GA since **2026-07-20**, **$10 per active committer per month plus usage**, on GitHub Enterprise Cloud and GitHub Team. Detection *"combines deterministic CodeQL rules for known anti-patterns with AI-powered analysis for issues that fall outside existing rule sets"* across C#, Go, Java, JavaScript, Python, Ruby and TypeScript. It gates merges through rulesets — "Require code quality results" with severity thresholds, plus coverage thresholds from Cobertura XML — and has a real findings REST API (public preview).
+GA since **2026-07-20**, **\$10 per active committer per month plus usage**, on GitHub Enterprise Cloud and GitHub Team. Detection *"combines deterministic CodeQL rules for known anti-patterns with AI-powered analysis for issues that fall outside existing rule sets"* across C#, Go, Java, JavaScript, Python, Ruby and TypeScript. It gates merges through rulesets — "Require code quality results" with severity thresholds, plus coverage thresholds from Cobertura XML — and has a real findings REST API (public preview).
 
 **The load-bearing sentence for this whole evaluation:** *"AI-powered findings never block your pull request on their own"* — the gate counts only rules-based CodeQL findings.
 
-**Read that together with §3.6:** GitHub's own architecture concedes that an AI reviewer should not be the merge gate. Achieving full AI-review-plus-gating on GitHub's stack means stacking Copilot ($19–39/seat) **+** Code Quality ($10/committer) **+** optionally Code Security ($30/committer) — and the AI half still cannot gate.
+**Read that together with §3.6:** GitHub's own architecture concedes that an AI reviewer should not be the merge gate. Achieving full AI-review-plus-gating on GitHub's stack means stacking Copilot (\$19–39/seat) **+** Code Quality (\$10/committer) **+** optionally Code Security (\$30/committer) — and the AI half still cannot gate.
 
 ---
 
@@ -290,23 +295,42 @@ GA since **2026-07-20**, **$10 per active committer per month plus usage**, on G
 
 ### 4.1 What we actually pay: the GLM Coding Pro plan (flat rate)
 
-**We do not pay per token.** The org runs on z.ai's **GLM Coding Pro plan at roughly $80/month as billed** — a flat subscription with rolling usage windows. Within quota, **every review has zero marginal cost.**
+**We do not pay per token.** The org runs on z.ai's **GLM Coding Pro plan at roughly \$80/month as billed** — a flat subscription with rolling usage windows. Within quota, **every review has zero marginal cost.**
 
 z.ai moved from a prompt-based quota to a **credit** system; the doc's previous "~400 prompts per 5-hour window" figures no longer exist in z.ai's documentation and have been replaced:
 
 | Plan | 5-hour credits | Weekly credits |
 |---|---:|---:|
-| Lite ($18/mo) | 2,000 | 10,000 |
+| Lite (\$18/mo) | 2,000 | 10,000 |
 | **Pro (ours)** | **12,000** | **60,000** |
 | Max | 28,000 | 140,000 |
 
 Credits are computed from tokens: `(input × in-multiplier + cached input × cached-multiplier + output × out-multiplier) / 10,000`. For **GLM‑5.2** the multipliers are **6.9 input / 1.7 cached input / 24 output**. Off-peak usage is charged at **50%**; peak is **Monday–Friday, 14:00–18:00 Singapore time (UTC+8)** — roughly 11:30–15:30 IST.
 
-*[unverified] Only the Lite price ($18) is quotable from z.ai's own documentation; the Pro (~$72–80) and Max ($160) prices come from secondary sources because z.ai's pricing page is client-rendered. Our billed figure of ~$80/month is the authoritative number for this brief.*
+*[unverified] Only the Lite price (\$18) is quotable from z.ai's own documentation; the Pro (~\$72–80) and Max (\$160) prices come from secondary sources because z.ai's pricing page is client-rendered. Our billed figure of ~\$80/month is the authoritative number for this brief.*
 
-### 4.2 What one review costs in credits
+### 4.2 What we actually run — 18 weeks of production telemetry
 
-Using our reference token profile of **~245k input / ~38k output** (see the sourcing note in §4.5):
+This is not a pilot. Measured from GitHub's Actions API across the six repositories running the action, **2026‑04‑12 → 2026‑08‑03**:
+
+| Metric | Value |
+|---|---|
+| Total runs recorded by GitHub | **2,768** across 6 repositories |
+| Sustained weekly volume since mid-July | **~499 runs/week** (up ~8× from ~60/week in early July) |
+| Implied monthly volume at that baseline | **~2,150 runs/month** |
+| Busiest single day | 196 runs |
+| Successful reviews | 1,682 (60.8% of all runs; 69.5% of runs that executed) |
+| Cancelled mid-run (superseded pushes) | 737 (26.6%) |
+| Failed | 192 (6.9%) · Skipped by design | 156 (5.6%) |
+| Median duration | **9.4 min** (successful runs: median 11 min, mean 14 min, p95 37 min) |
+| Total runner wall-clock | 491 hours — **\$0 billed**, self-hosted |
+| Peak simultaneous runs | 11; 79.2% of runs overlapped another |
+
+Two things this establishes for management: the action is **embedded in daily PR flow at production scale**, not being trialled; and the honest reliability picture is that **~13% of runs produce no review** (failed or skipped) with another ~27% cancelled by superseding pushes. §6 covers what to do about that.
+
+### 4.3 What one review costs in credits
+
+Using a reference token profile of **~245k input / ~38k output** for a full first review (see the sourcing note in §4.7):
 
 ```
 (245,120 × 6.9 + 38,440 × 24) / 10,000  =  ~261 credits per review
@@ -321,60 +345,78 @@ Using our reference token profile of **~245k input / ~38k output** (see the sour
 | Per week (60,000 credits) | ~230 reviews | ~460 reviews |
 | **Per month (approx.)** | **~1,000 reviews** | **~2,000 reviews** |
 
-That is materially tighter than the previous version of this document claimed, and it is still far above our actual PR volume. If review volume ever outgrows it, the Max plan roughly doubles the weekly ceiling for $160/month.
+**Reconciling that ceiling with the ~2,150 runs/month we actually do (§4.2).** Runs are not all billable reviews, and the reference profile is a *full first review* — the most expensive kind:
 
-**Amortized cost per review on ~$80/month:** ~$0.40 at 200 reviews/month · ~$0.16 at 500 · ~$0.08 at 1,000.
+| Of ~2,150 runs/month | Share | AI quota consumed |
+|---|---:|---|
+| Skipped by design (oversized PR, no agents) | ~5.6% | none — the skip happens before any agent call |
+| Failed | ~6.9% | little — median failure ends in ~1 minute |
+| Cancelled by a superseding push | ~26.6% | partial — median 4.2 min, killed mid-review |
+| **Completed reviews** | **~69.5% ≈ 1,500/month** | full, and cheaper on re-runs (description and diagram calls skipped, inline scope narrowed) |
+
+So ~1,500 billable reviews/month sits inside the 1,000–2,000 band above, which is exactly what we observe: **the Pro plan has carried this volume in production for four months.** The band is wide because it depends on the peak/off-peak mix — our peak window (11:30–15:30 IST) is mid-workday, so a meaningful share of reviews pay the 2× rate.
+
+**Treat 1,000–2,000/month as a planning envelope, not a hard ceiling.** If volume grows past it, the Max plan roughly doubles the weekly allowance for \$160/month — still lunch money at org scale.
+
+**Amortized cost per review on ~\$80/month:** ~\$0.05 at our current ~1,500 completed reviews/month · ~\$0.08 at 1,000 · ~\$0.16 at 500.
+
+**Compute is free to us as well.** Our action runs on **SourceFuse self-hosted runners**, so it consumes **no billable GitHub Actions minutes** — the AI subscription is the entire cost. This is a real line-item difference from Copilot code review, which has run on GitHub Actions runners and billed minutes to the repository on private repos since 2026‑06‑01, on top of its seat and AI-credit charges.
 
 **Quota exhaustion degrades gracefully by design.** z.ai returns 429s until the window resets; our patient rate-limit budget (10s escalating ×1.5 to a 120s ceiling, up to 5h per AI call) rides out the reset. A throttled review is late, never lost.
 
-### 4.3 API-equivalent benchmark — *not what we pay*
+### 4.4 API-equivalent benchmark — *not what we pay*
 
 This table exists solely to compare like with like against per-review-priced competitors. **We are on the flat Pro plan; none of these API prices is a bill we receive.**
 
 | Option | Cost per review | Basis |
 |---|---:|---|
-| **Ours on the GLM Coding Pro plan (actual)** | **$0 marginal** (~$0.08–0.40 amortized) | §4.2 |
-| Ours on Claude Haiku 4.5 API | ~$0.44 | $1 / $5 per MTok |
-| Ours on GLM‑5.2 pay-per-use API | ~$0.51 | **$1.4 / $4.4** per MTok |
-| Ours on Claude Sonnet 5 API | ~$0.87 → **~$1.31 from 2026‑09‑01** | $2/$10 introductory, then $3/$15 |
-| **Ours on Claude Opus 5 API** — the frontier-quality option, one line of YAML | **~$2.19** (~$2.85 allowing for the newer tokenizer) | $5 / $25 per MTok |
-| ultrareview | $5–25 | 3 free runs (Pro/Max), then usage credits |
-| **Managed Code Review** | **$15–25** | *"Each review averages $15-25 in cost, scaling with PR size"* |
+| **Ours on the GLM Coding Pro plan (actual)** | **\$0 marginal** (~\$0.08–0.40 amortized) | §4.2 |
+| Ours on Claude Haiku 4.5 API | ~\$0.44 | \$1 / \$5 per MTok |
+| Ours on GLM‑5.2 pay-per-use API | ~\$0.51 | **\$1.4 / \$4.4** per MTok |
+| Ours on Claude Sonnet 5 API | ~\$0.87 → **~\$1.31 from 2026‑09‑01** | \$2/\$10 introductory, then \$3/\$15 |
+| **Ours on Claude Opus 5 API** — the frontier-quality option, one line of YAML | **~\$2.19** (~\$2.85 allowing for the newer tokenizer) | \$5 / \$25 per MTok |
+| ultrareview | \$5–25 | 3 free runs (Pro/Max), then usage credits |
+| **Managed Code Review** | **\$15–25** | *"Each review averages \$15-25 in cost, scaling with PR size"* |
 | Copilot code review | **not disclosed** | see §4.4 |
 
 Two adjustments worth knowing:
-- The previous version of this document priced GLM‑5.2 at $0.60/$2.20. **That is GLM‑4.7's price.** GLM‑5.2 is $1.4/$4.4, so the API-equivalent figure roughly doubles — it does not change the conclusion, but the old number was wrong.
+- The previous version of this document priced GLM‑5.2 at \$0.60/\$2.20. **That is GLM‑4.7's price.** GLM‑5.2 is \$1.4/\$4.4, so the API-equivalent figure roughly doubles — it does not change the conclusion, but the old number was wrong.
 - Claude models from 4.7 onward use a newer tokenizer that *"produces approximately 30% more tokens for the same text."* Any Opus 5 / Sonnet 5 estimate built from older token counts is understated by roughly that much; the table shows both.
 
-### 4.4 Copilot's cost is not forecastable — and that is a documented fact
+### 4.5 Copilot's cost is not forecastable — and that is a documented fact
 
 Copilot code review has **three** cost components and GitHub publishes a number for none of them at the per-review level:
 
-1. **Seat**: $10 Pro · $39 Pro+ · $100 Max · **$19 Business** · **$39 Enterprise** per user per month. Annual billing for Business/Enterprise is not offered on the current usage-based model (legacy annual plans are grandfathered only). [unverified] Volume discounts would be a sales negotiation.
-2. **AI credits** at $0.01 each, pooled at the billing entity (1,900/user Business, 3,900/user Enterprise) and **forfeited monthly if unused**. Promotional allowances (3,000 and 7,000) **end 2026‑09‑01**. The per-review credit consumption is undisclosed because *"the model is selected automatically and is not disclosed."*
-3. **GitHub Actions minutes**, charged to the repository, since 2026‑06‑01. Minutes per review: not published. Medium effort *"uses more AI credits and GitHub Actions minutes than Low."*
+1. **Seat**: \$10 Pro · \$39 Pro+ · \$100 Max · **\$19 Business** · **\$39 Enterprise** per user per month. Annual billing for Business/Enterprise is not offered on the current usage-based model (legacy annual plans are grandfathered only). [unverified] Volume discounts would be a sales negotiation.
+2. **AI credits** at \$0.01 each, pooled at the billing entity (1,900/user Business, 3,900/user Enterprise) and **forfeited monthly if unused**. Promotional allowances (3,000 and 7,000) **end 2026‑09‑01**. The per-review credit consumption is undisclosed because *"the model is selected automatically and is not disclosed."*
+3. **GitHub Actions minutes**, charged to the repository on private repos, since 2026‑06‑01. Minutes per review: not published. Medium effort *"uses more AI credits and GitHub Actions minutes than Low."* Our action carries no equivalent charge — it runs on our self-hosted runners (§4.3).
 
-The only public per-review anchor is the **retired** premium-request model: code review consumed *"13 premium requests"* at $0.04 each = **$0.52 per review** — and that model was replaced on 2026‑06‑01, so it applies only to grandfathered subscribers.
+The only public per-review anchor is the **retired** premium-request model: code review consumed *"13 premium requests"* at \$0.04 each = **\$0.52 per review** — and that model was replaced on 2026‑06‑01, so it applies only to grandfathered subscribers.
 
 **The fair framing for management:** if the org already pays for Copilot seats for code completion, review commentary is close to free at the margin — but it is *unmeasurable* commentary that cannot gate a merge, cannot be exported per finding, and repeats comments developers have already resolved.
 
-### 4.5 What it costs at our volume
+### 4.6 What it costs at our volume
 
-| Monthly review volume | **Ours (GLM Pro plan)** | Ours @ Opus 5 API | Managed Code Review | Copilot code review |
+Anchored on the volume we actually run (§4.2): **~1,500 completed reviews per month** across 6 repositories.
+
+| Completed reviews / month | **Ours (GLM Pro plan)** | Ours @ Opus 5 API | Managed Code Review | Copilot code review |
 |---|---:|---:|---:|---|
-| 200 | **~$80 flat** | ~$440–570 | $3,000–5,000 | seats (likely sunk) + unforecastable usage |
-| 1,000 | **~$80–160** (Pro → Max for headroom) | ~$2,190–2,850 | $15,000–25,000 | as above |
-| 2,000 | **~$160** (Max) | ~$4,380–5,700 | $30,000–50,000 | as above |
+| 500 | **~\$80 flat** | ~\$1,090–1,420 | \$7,500–12,500 | seats (likely sunk) + unforecastable usage + Actions minutes |
+| 1,000 | **~\$80 flat** | ~\$2,190–2,850 | \$15,000–25,000 | as above |
+| **1,500 — our current volume** | **~\$80–160** (Pro, Max for headroom) | ~\$3,280–4,270 | **\$22,500–37,500/mo** = **\$270k–450k/yr** | as above |
 
-**The cost ladder:** GLM plan (≈$0 marginal) → GLM API ($0.51) → Sonnet 5 ($0.87–1.31) → **Opus 5 ($2.19–2.85)** → ultrareview ($5–25) → managed service ($15–25). Even the premium play — our pipeline with Opus 5 as the reviewer — is **5–11× cheaper per review than the managed service**, while keeping every workflow feature. Because the model is a config value, that quality/cost trade is a one-line change per repo, not a platform migration.
+At our real volume, the managed service would cost roughly **\$270,000–450,000 per year** for the six repositories currently running the action. Our total AI spend for the same work is **~\$960–1,920 per year.** And because the managed service's "after every push" mode bills *every push*, its realistic figure is higher still — our telemetry shows 27% of runs are superseded by another push, each of which would be separately billed.
 
-### 4.6 Sourcing notes and dated caveats
+**The cost ladder:** GLM plan (≈\$0 marginal) → GLM API (\$0.51) → Sonnet 5 (\$0.87–1.31) → **Opus 5 (\$2.19–2.85)** → ultrareview (\$5–25) → managed service (\$15–25). Even the premium play — our pipeline with Opus 5 as the reviewer — is **5–11× cheaper per review than the managed service**, while keeping every workflow feature. Because the model is a config value, that quality/cost trade is a one-line change per repo, not a platform migration.
+
+### 4.7 Sourcing notes and dated caveats
 
 - Our per-review token profile (~245,120 in / ~38,440 out, 7 AI calls) is the **illustrative payload in `docs/backstage-integration.md`**, not captured production telemetry. It is internally consistent with our cost estimator, but it should be replaced with a real run before being quoted externally. Our per-run token and cost figures are client-side estimates, never billing data — every summary comment says so.
 - A default combined-mode first run makes roughly **4–5 AI calls** (pre-flight, one agent, description, diagrams); separate/strict mode reaches ~12. Re-runs are cheaper — the description and diagram calls are skipped entirely.
-- Latency: we have no fleet-wide measurement. The one instrumented run in our documentation is **187 seconds**. Structural bounds: `agent_timeout` 800s per call, a 30-minute streaming hard cap.
-- **Dated items to re-verify before quoting:** Claude Sonnet 5 rises from $2/$10 to $3/$15 on **2026‑09‑01**; Copilot Business/Enterprise promotional AI credits drop on **2026‑09‑01**; z.ai's off-peak discount and multipliers are subject to change; Anthropic's managed Code Review is a research preview and its pricing may move.
-- [unverified] Claude Max subscription pricing ($100/$200) and whether a `claude_code_oauth_token` used in CI draws on the same quota as a developer's interactive Claude Code session. The latter is a strong inference — the OAuth token authenticates the same subscription identity — but it is not stated in any primary source.
+- **Volume, latency and outcome figures in §4.2 are real**, derived from GitHub's Actions API across all 2,768 runs of the workflow in the six repositories, 2026‑04‑12 → 2026‑08‑03. Durations are wall-clock (`run_started_at` → `updated_at`), which includes queue and idle time — a consistent relative measure, not billable minutes. Runs under 1s or over 2h are excluded from duration statistics.
+- Our per-review **token** figures remain the weak link: no fleet-wide token telemetry is aggregated yet, so the credit math in §4.3 rests on a single reference profile. The action already emits `input_tokens` / `output_tokens` per run; aggregating them through the Backstage payload would replace the estimate with measurement.
+- **Dated items to re-verify before quoting:** Claude Sonnet 5 rises from \$2/\$10 to \$3/\$15 on **2026‑09‑01**; Copilot Business/Enterprise promotional AI credits drop on **2026‑09‑01**; z.ai's off-peak discount and multipliers are subject to change; Anthropic's managed Code Review is a research preview and its pricing may move.
+- [unverified] Claude Max subscription pricing (\$100/\$200) and whether a `claude_code_oauth_token` used in CI draws on the same quota as a developer's interactive Claude Code session. The latter is a strong inference — the OAuth token authenticates the same subscription identity — but it is not stated in any primary source.
 
 ---
 
@@ -389,7 +431,7 @@ The only public per-review anchor is the **retired** premium-request model: code
 | PR workflow automation (12) | 5 | 2 | 1 | 4 | 2 | Only ours: re-run focus, reply verification, reopen-on-regression, description + diagrams. Plugin aborts rather than converges |
 | Codebase context depth (8) | 4 | 4 | 4 | 5 | 4 | Theirs read broadly and uncapped; ours is compiler-exact and cost-bounded; Copilot is agentic but has permanent file blind spots |
 | Metrics & governance (10) | 5 | 2 | 1 | 3 | 3 | Only ours: per-finding tracking + 23 outputs + cost in-PR. Copilot has the better *aggregate* metric (acceptance rate) but no findings export |
-| Cost per review (12) | 5 | 3 | 3 | 1 | 3 | ~$0 marginal on the existing plan vs $15–25 managed vs Copilot's undisclosed usage |
+| Cost per review (12) | 5 | 3 | 3 | 1 | 3 | ~\$0 marginal on the existing plan vs \$15–25 managed vs Copilot's undisclosed usage |
 | Provider & model flexibility (8) | 5 | 4 | 4 | 1 | 0 | Copilot: model undisclosed, unselectable, no BYOK |
 | Org fit — JIRA, Backstage, z.ai, Angular/LB4, gating (10) | 5 | 1 | 1 | 1 | 2 | Copilot scores 2 for read-only MCP context; none of the others covers any of our integrations |
 | Noise control / developer experience (6) | 5 | 2 | 3 | 4 | 1 | Copilot documents that it repeats resolved comments and offers no volume control |
@@ -404,7 +446,7 @@ The only public per-review anchor is the **retired** premium-request model: code
 
 1. **"Anthropic and GitHub maintain theirs; who maintains ours?"** True, and the single largest real cost of this decision. Mitigations: the codebase is deliberately boring to maintain — `action.yml` is generated from one schema and drift-checked at build time, all tunables live in one constants file, the summary-comment output is snapshot-locked, and 251 tests run on `npm run ci`. The surfaces we depend on (GitHub REST/GraphQL and one streaming chat API) are stable. **Gap to close:** this repository has no `.github/` workflows, so the drift check and test suite run only on a developer's `npm run build`, not in CI. That should be fixed.
 
-2. **"Isn't Claude a better reviewer than GLM?"** On raw model quality, likely yes — and the answer is **Opus 5 through our own pipeline**, not a different platform. Pointing `anthropic_base_url` at Anthropic turns our action into an Opus 5 reviewer for ~$2.19–2.85 per review: frontier-model quality, still 5–11× under the managed service, with every workflow feature intact. At our scale, review *usefulness* is dominated by workflow — noise control, thread lifecycle, tracking — which is where ours leads regardless of model.
+2. **"Isn't Claude a better reviewer than GLM?"** On raw model quality, likely yes — and the answer is **Opus 5 through our own pipeline**, not a different platform. Pointing `anthropic_base_url` at Anthropic turns our action into an Opus 5 reviewer for ~\$2.19–2.85 per review: frontier-model quality, still 5–11× under the managed service, with every workflow feature intact. At our scale, review *usefulness* is dominated by workflow — noise control, thread lifecycle, tracking — which is where ours leads regardless of model.
 
 3. **"We already pay for Copilot; isn't its review free?"** Nearly free at the margin, yes — but it cannot gate a merge, has no severity taxonomy, ignores developer replies, re-posts comments developers already resolved, permanently skips files like `tsconfig.json` and `*.d.ts`, and gives you no per-finding export for tracking. It is worth running **alongside** ours on repos where the seats are already paid; it is not a replacement for the gating and tracking layer.
 
@@ -412,15 +454,17 @@ The only public per-review anchor is the **retired** premium-request model: code
 
 5. **"Aren't we duplicating their roadmap?"** Partially, in both directions. Their best idea we lack — a verification pass to kill false positives — is a bounded addition to our pipeline (§7.3). Our operational features (JIRA, Backstage, gating, reply verification, provider freedom) are not on anyone's public roadmap and arguably never will be, since several of them conflict with a managed business model.
 
-6. **What we genuinely do not have.** A false-positive verification pass. A suggestion-acceptance-rate metric. 👍/👎 feedback learning. A hosted analytics UI (we have a Backstage payload; someone must build the dashboard). "Fix this" deep links. And the entire interactive dev-automation category — writing code, creating PRs, fixing bugs on request, `@mention` Q&A, MCP servers, scheduled automation. All of that is out of scope for a reviewer by design, and it is why `claude-code-action` is a **complement** to ours rather than a competitor.
+6. **Our own reliability numbers are not flattering, and management should see them.** Across 2,768 production runs: **6.9% failed** (192 runs, and weekly failures ran 29 → 43 → 118 across three flat-volume weeks — growing faster than usage), **26.6% were cancelled** by a superseding push (737 runs, 111 runner-hours of wasted compute), and **56 runs hung past two hours** before being killed, concentrated in a single three-day window. None of this is a reason to change platform — it is a reason to apply three well-understood fixes (§7.6). It is worth noting that the competitors' equivalent failure rates are simply not observable: none of them publishes one, and only ours emits the telemetry that makes this table possible.
+
+7. **What we genuinely do not have.** A false-positive verification pass. A suggestion-acceptance-rate metric. 👍/👎 feedback learning. A hosted analytics UI (we have a Backstage payload; someone must build the dashboard). "Fix this" deep links. And the entire interactive dev-automation category — writing code, creating PRs, fixing bugs on request, `@mention` Q&A, MCP servers, scheduled automation. All of that is out of scope for a reviewer by design, and it is why `claude-code-action` is a **complement** to ours rather than a competitor.
 
 ---
 
 ## 7. Recommendation
 
-1. **Keep our AI PR Review Action as the org-wide default reviewer.** It is the only option that satisfies our integrations (JIRA, Backstage, Angular/LoopBack4), runs at **zero marginal cost on the existing ~$80/month GLM Coding Pro plan**, controls review noise across re-runs, and can gate a merge at all.
+1. **Keep our AI PR Review Action as the org-wide default reviewer.** It is the only option that satisfies our integrations (JIRA, Backstage, Angular/LoopBack4), runs at **zero marginal cost on the existing ~\$80/month GLM Coding Pro plan**, controls review noise across re-runs, and can gate a merge at all.
 
-2. **For quality-critical repos, upgrade the model, not the platform.** Point the same action at **Claude Opus 5** via `anthropic_base_url` + `anthropic_model` for ~$2.19–2.85 per review — frontier-model reviews with all our workflow features, one line of YAML per repo.
+2. **For quality-critical repos, upgrade the model, not the platform.** Point the same action at **Claude Opus 5** via `anthropic_base_url` + `anthropic_model` for ~\$2.19–2.85 per review — frontier-model reviews with all our workflow features, one line of YAML per repo.
 
 3. **Adopt the competitors' best idea: add a verification pass.** Three of the five Anthropic offerings now verify each candidate finding with an independent agent before posting. A bounded "try to refute this finding" step before we post inline comments closes our one meaningful quality gap at a marginal token cost, and directly attacks the false-positive complaint that drives developer distrust.
 
@@ -428,9 +472,16 @@ The only public per-review anchor is the **retired** premium-request model: code
 
 5. **Run Copilot code review alongside, where seats are already paid.** It costs nothing extra at the margin on repos whose developers hold Copilot seats, and a second opinion has value. Configure it via ruleset with "Review new pushes" **off** to limit the documented comment repetition. Do not treat it as a gate; it cannot be one.
 
-6. **Fix the CI gap in our own repo** (no `.github/` workflows). The maintenance argument in §6.1 depends on the drift check and test suite actually running on every PR.
+6. **Apply the three reliability fixes the telemetry points to** — each is a few lines of workflow YAML and together they remove most of the waste in §6.6:
+   - a `concurrency` group keyed to the PR ref with `cancel-in-progress: true`, so a superseded review is never *started* rather than being run and killed (recovers ~111 runner-hours per 18 weeks);
+   - an explicit `timeout-minutes: 45–60` on the job — the 95th percentile of successful runs is 37 minutes, so this truncates the hung-run tail without touching healthy reviews;
+   - triage of the failure mode driving the 29 → 43 → 118 weekly trend before volume grows further.
 
-7. **Re-evaluate in 6 months.** The managed service will mature and Copilot ships monthly. Our per-review cost advantage and integration moat are unlikely to change, but the verification-quality gap may narrow from both directions.
+7. **Aggregate token telemetry into Backstage.** The action already emits `input_tokens` / `output_tokens` per run; nothing consumes them in aggregate. Doing so replaces the single reference profile behind our credit math (§4.3) with measurement, and gives finance a real cost-per-review number.
+
+8. **Fix the CI gap in our own repo** (no `.github/` workflows). The maintenance argument in §6.1 depends on the drift check and test suite actually running on every PR.
+
+9. **Re-evaluate in 6 months.** The managed service will mature and Copilot ships monthly. Our per-review cost advantage and integration moat are unlikely to change, but the verification-quality gap may narrow from both directions.
 
 ---
 
@@ -459,23 +510,24 @@ The only public per-review anchor is the **retired** premium-request model: code
 | Inline comments use `event: 'COMMENT'` | `src/github/inline-reviewer.ts` |
 | Re-run inline scope (critical/high + documentation) | `src/config/taxonomy.ts` |
 | Backstage payload fields | `src/results/backstage-reporter.ts`, `docs/backstage-integration.md` |
-| Reference token profile / 187s duration | `docs/backstage-integration.md` (**illustrative payload, not telemetry**) |
+| Reference token profile (245k/38k) | `docs/backstage-integration.md` (**illustrative payload, not telemetry**) |
+| Production volume, latency, outcome mix (§4.2) | GitHub Actions REST API, all 2,768 runs of `ai-code-review.yml` across 6 repos, 2026‑04‑12 → 2026‑08‑03 |
 | 251 tests | `npm test` |
 
 ## Appendix C — external sources (all fetched 2026-08-03)
 
 **Anthropic**
 - https://code.claude.com/docs/en/github-actions — action overview, plugin workflow, `claude_args` (`--max-turns` default 10), Bedrock/Vertex/Foundry/OIDC auth, Agent SDK
-- https://code.claude.com/docs/en/code-review — managed service: $15–25/review, 20-minute average, research preview, Team/Enterprise, no ZDR, 🔴/🟡/🟣 taxonomy, `REVIEW.md` levers, `bughunter-severity` check-run JSON, spend caps, analytics dashboard, July 2026 `@claude review always` change
-- https://code.claude.com/docs/en/ultrareview — 3 free runs, $5–25, 5–10 minutes, 500 files / 8,000 lines, cannot post to a PR, silent downgrade on Bedrock/Vertex/Foundry/ZDR
+- https://code.claude.com/docs/en/code-review — managed service: \$15–25/review, 20-minute average, research preview, Team/Enterprise, no ZDR, 🔴/🟡/🟣 taxonomy, `REVIEW.md` levers, `bughunter-severity` check-run JSON, spend caps, analytics dashboard, July 2026 `@claude review always` change
+- https://code.claude.com/docs/en/ultrareview — 3 free runs, \$5–25, 5–10 minutes, 500 files / 8,000 lines, cannot post to a PR, silent downgrade on Bedrock/Vertex/Foundry/ZDR
 - https://code.claude.com/docs/en/commands — local `/code-review` flags, `--comment`, `/simplify` history
 - https://github.com/anthropics/claude-code-action — `action.yml` (39 inputs, 5 outputs, `ANTHROPIC_BASE_URL` passthrough), `docs/solutions.md` (8 recipes), `docs/capabilities-and-limitations.md`, `docs/usage.md`, `docs/setup.md` (workload identity federation), `src/mcp/github-inline-comment-server.ts`, `src/entrypoints/post-buffered-inline-comments.ts` (`claude-haiku-4-5` classifier)
 - https://github.com/anthropics/claude-code/blob/main/plugins/code-review/commands/code-review.md — the real 9-step pipeline; its `README.md` is stale
-- https://platform.claude.com/docs/en/about-claude/pricing — Opus 5 $5/$25, Fable 5 $10/$50, Sonnet 5 $2/$10 → $3/$15 on 2026‑09‑01, Haiku 4.5 $1/$5, ~30% tokenizer increase on 4.7+, batch −50%, caching, fast mode
+- https://platform.claude.com/docs/en/about-claude/pricing — Opus 5 \$5/\$25, Fable 5 \$10/\$50, Sonnet 5 \$2/\$10 → \$3/\$15 on 2026‑09‑01, Haiku 4.5 \$1/\$5, ~30% tokenizer increase on 4.7+, batch −50%, caching, fast mode
 
 **z.ai**
 - https://docs.z.ai/devpack/overview — credit allowances (2,000/12,000/28,000 per 5h; 10,000/60,000/140,000 weekly), credit formula, GLM‑5.2 multipliers 6.9/1.7/24, 50% off-peak, peak Mon–Fri 14:00–18:00 UTC+8
-- https://docs.z.ai/guides/overview/pricing — GLM‑5.2 $1.4 input / $0.26 cached / $4.4 output
+- https://docs.z.ai/guides/overview/pricing — GLM‑5.2 \$1.4 input / \$0.26 cached / \$4.4 output
 
 **GitHub**
 - https://docs.github.com/en/copilot/concepts/agents/code-review — ephemeral Actions environment, agentic context, effort levels, unlicensed-user reviews, MCP, budget cutoff
@@ -485,12 +537,12 @@ The only public per-review anchor is the **retired** premium-request model: code
 - https://docs.github.com/en/copilot/tutorials/customize-code-review — supported and unsupported instruction types
 - https://docs.github.com/en/copilot/responsible-use/agents — missed problems, false positives, insecure suggestions, bias
 - https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing — model not disclosed; AI credits + Actions minutes
-- https://docs.github.com/en/copilot/get-started/plans — $10 / $39 / $100 / $19 / $39 seat pricing
-- https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises — $0.01/credit, pooling, monthly forfeiture, promo end 2026‑09‑01
+- https://docs.github.com/en/copilot/get-started/plans — \$10 / \$39 / \$100 / \$19 / \$39 seat pricing
+- https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises — \$0.01/credit, pooling, monthly forfeiture, promo end 2026‑09‑01
 - https://docs.github.com/en/copilot/reference/copilot-usage-metrics/copilot-usage-metrics — `total_reviewed_by_copilot`, `total_copilot_applied_suggestions`
-- https://docs.github.com/en/code-security/concepts/code-quality/code-quality and https://docs.github.com/en/code-security/tutorials/improve-code-quality/catch-issues-before-merge — GA, $10/committer, ruleset gating, **"AI-powered findings never block your pull request on their own"**
+- https://docs.github.com/en/code-security/concepts/code-quality/code-quality and https://docs.github.com/en/code-security/tutorials/improve-code-quality/catch-issues-before-merge — GA, \$10/committer, ruleset gating, **"AI-powered findings never block your pull request on their own"**
 - https://github.blog/changelog/ — 2026‑03‑05 (agentic architecture GA), 2026‑04‑27 (Actions minutes from 2026‑06‑01), 2026‑06‑25 (~20% cost reduction), 2026‑07‑17 (customization; repo-level metrics GA), 2026‑07‑20 (Code Quality GA), 2026‑07‑29 (skills + MCP GA)
 
 ---
 
-*Prepared 2026-08-03 by the Platform Engineering team. Competitor pricing and preview status should be re-verified before external quotation; see the dated caveats in §4.6.*
+*Prepared 2026-08-05 by the Platform Engineering team. Competitor pricing and preview status should be re-verified before external quotation; see the dated caveats in §4.6.*
