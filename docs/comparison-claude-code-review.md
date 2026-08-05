@@ -488,7 +488,11 @@ At our real volume, the managed service would cost roughly **\$270,000–450,000
 
 5. **"Aren't we duplicating their roadmap?"** Partially, in both directions. Their best idea we lack — a verification pass to kill false positives — is a bounded addition to our pipeline (§7.3). Our operational features (JIRA, Backstage, gating, reply verification, provider freedom) are not on anyone's public roadmap and arguably never will be, since several of them conflict with a managed business model.
 
-6. **Our own reliability numbers are not flattering, and management should see them.** Across 2,768 production runs: **6.9% failed** (192 runs, and weekly failures ran 29 → 43 → 118 across three flat-volume weeks — growing faster than usage), **26.6% were cancelled** by a superseding push (737 runs, 111 runner-hours of wasted compute), and **56 runs hung past two hours** before being killed, concentrated in a single three-day window. None of this is a reason to change platform — it is a reason to apply three well-understood fixes (§7.6). It is worth noting that the competitors' equivalent failure rates are simply not observable: none of them publishes one, and only ours emits the telemetry that makes this table possible.
+6. **Our own reliability numbers are not flattering, and management should see them.** Across 2,768 production runs: **6.9% failed** (192 runs, and weekly failures ran 29 → 43 → 118 across three flat-volume weeks — growing faster than usage), and **56 runs hung past two hours** before being killed, concentrated in a single three-day window. Both are addressable (§7.6).
+
+   The **26.6% cancellation rate** (737 runs, 111 runner-hours) needs a correction that an earlier draft of this document got wrong. Those are not a missing-configuration problem: a `concurrency` group with `cancel-in-progress: true` has been in the workflow since **2026‑04‑12**, the first day of the measurement window. The cancellations *are* that mechanism working — a developer pushes again while a review is in flight, and the superseded run is killed. GitHub cannot avoid starting the first run, so this cost is inherent to a push-heavy workflow rather than a defect. The lever that would actually reduce it is behavioural (fewer rapid successive pushes) or a short debounce, not a config flag.
+
+   It is worth noting that the competitors' equivalent failure rates are simply not observable: none of them publishes one, and only ours emits the telemetry that makes this table possible.
 
 7. **What we genuinely do not have.** A false-positive verification pass. A suggestion-acceptance-rate metric. 👍/👎 feedback learning. A hosted analytics UI (we have a Backstage payload; someone must build the dashboard). "Fix this" deep links. And the entire interactive dev-automation category — writing code, creating PRs, fixing bugs on request, `@mention` Q&A, MCP servers, scheduled automation. All of that is out of scope for a reviewer by design, and it is why `claude-code-action` is a **complement** to ours rather than a competitor.
 
@@ -506,10 +510,11 @@ At our real volume, the managed service would cost roughly **\$270,000–450,000
 
 5. **Run Copilot code review alongside, where seats are already paid.** It costs nothing extra at the margin on repos whose developers hold Copilot seats, and a second opinion has value. Configure it via ruleset with "Review new pushes" **off** to limit the documented comment repetition. Do not treat it as a gate; it cannot be one.
 
-6. **Apply the three reliability fixes the telemetry points to** — each is a few lines of workflow YAML and together they remove most of the waste in §6.6:
-   - a `concurrency` group keyed to the PR ref with `cancel-in-progress: true`, so a superseded review is never *started* rather than being run and killed (recovers ~111 runner-hours per 18 weeks);
-   - an explicit `timeout-minutes: 45–60` on the job — the 95th percentile of successful runs is 37 minutes, so this truncates the hung-run tail without touching healthy reviews;
-   - triage of the failure mode driving the 29 → 43 → 118 weekly trend before volume grows further.
+6. **Apply the two reliability fixes the telemetry actually supports:**
+   - an explicit **`timeout-minutes: 45–60`** on the review job — the 95th percentile of successful runs is 37 minutes, so this truncates the hung-run tail (56 runs, 247 wall-clock hours) without touching healthy reviews. This is genuinely missing today;
+   - **triage the failure mode** driving the 29 → 43 → 118 weekly trend before volume grows further.
+
+   Explicitly *not* recommended: adding a `concurrency` group. It is already there and has been since day one (§6.6).
 
 7. **Aggregate token telemetry into Backstage.** The action already emits `input_tokens` / `output_tokens` per run; nothing consumes them in aggregate. Doing so replaces the single reference profile behind our credit math (§4.3) with measurement, and gives finance a real cost-per-review number.
 
