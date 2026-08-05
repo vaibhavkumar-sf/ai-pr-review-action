@@ -237,13 +237,31 @@ jobs:
           claude_args: --model glm-5.2
 ```
 
-**A second, unrelated blocker found by actually running it.** We piloted this configuration on `sourcefuse/telescope-health-backend-api` (PR #4182). The first run failed **before reaching the AI endpoint at all**:
+#### Piloted, not theorised: what happened when we actually ran it
+
+We ran this exact configuration on `sourcefuse/telescope-health-backend-api` (PR #4182), on our own self-hosted runners, against our GLM Coding Plan keys. **It took three attempts to get a review out of it**, and each failure is a finding.
+
+**Attempt 1 — blocked by a GitHub App requirement, before any AI call:**
 
 > `App token exchange failed: 401 Unauthorized - Claude Code is not installed on this repository. Please install the Claude Code GitHub App at https://github.com/apps/claude`
 
-With no `github_token` supplied, the action requests a GitHub OIDC token and exchanges it for a **Claude GitHub App** token — so out of the box it requires an org admin to install Anthropic's GitHub App, independently of which model you point it at. Passing `github_token: ${{ secrets.GITHUB_TOKEN }}` explicitly skips that exchange. Worth knowing before anyone estimates "we could switch in an afternoon."
+With no `github_token` supplied, the action requests a GitHub OIDC token and exchanges it for a **Claude GitHub App** token. Out of the box, adopting it therefore requires an org admin to install Anthropic's GitHub App — independently of which model you point it at. Passing `github_token: ${{ secrets.GITHUB_TOKEN }}` skips the exchange.
 
-Usefully, that same failing run **confirmed the GLM wiring is correct** — its logged environment showed `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` and all three `ANTHROPIC_DEFAULT_*_MODEL=glm-5.2` values arriving intact.
+**Attempt 2 — ran to completion on GLM‑5.2, and posted nothing.** The run was reported green. Its result payload:
+
+```json
+{"type":"result","subtype":"success","is_error":false,
+ "duration_ms":1061515,        // 17.7 minutes
+ "num_turns":38,
+ "total_cost_usd":3.245332,
+ "permission_denials_count":21}
+```
+
+The plugin declares its required tools in its own command frontmatter, but **that declaration is not honoured when the command is invoked through the action** — all 21 of its `gh` and inline-comment calls were denied, and the review was silently discarded. The job still reported success. A team running this unattended would see a green check and an empty review, with nothing in the PR to indicate the difference. The fix is an explicit `--allowedTools` in `claude_args` mirroring the plugin's frontmatter.
+
+**What attempt 2 does prove:** the GLM wiring in this section is correct. The SDK options and init event both logged `"model": "glm-5.2"`, and the run consumed 38 turns against our z.ai endpoint. **Anthropic's official reviewer does run on our GLM plan.**
+
+**Two figures worth carrying into the cost discussion.** 17.7 minutes for a single review of a 117-line diff — against a measured median of 9.4 minutes for our own action (§4.2) and Anthropic's own 20-minute average for the managed service. And the `total_cost_usd: 3.25` the SDK reports is computed at *Claude* list prices; on our flat GLM plan the real marginal cost is quota, not dollars — but 38 turns for one small diff is a useful signal of how much more an unbounded agent loop consumes than our single-pass design.
 
 **One further catch for the `code-review` plugin specifically.** Its pipeline requests Haiku, Sonnet and Opus subagents by tier name (§3.3). On a GLM endpoint those aliases must each be remapped with `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL`, or the tiering silently misroutes.
 
