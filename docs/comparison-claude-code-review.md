@@ -274,7 +274,7 @@ The operational consequence is severe and easy to miss: **the plugin reviews a p
 | 3 | plugin frontmatter | review posted, but single-agent (no `Task`) | 21 | 42 | 13.2 min |
 | 4 | + `Task,Read,Glob,Grep` | **nothing posted — already reviewed once** | 6 | 20 | 3.6 min |
 
-**Figures worth carrying into the cost discussion.** 13–18 minutes for a single review of a 117-line diff, against a measured median of 9.4 minutes for our own action (§4.2) and Anthropic's 20-minute average for the managed service. The `total_cost_usd` the SDK reports ($0.72–3.25 per attempt) is computed at *Claude* list prices; on our flat GLM plan the real marginal cost is quota, not dollars — but 38–42 turns for one small diff shows how much more an unbounded agent loop consumes than our single-pass design.
+**Figures worth carrying into the cost discussion.** 13–18 minutes for a single review of a 117-line diff, against a measured median of 9.4 minutes for our own action (§4.2) and Anthropic's 20-minute average for the managed service. The `total_cost_usd` the SDK reports (\$0.72–3.25 per attempt) is computed at *Claude* list prices; on our flat GLM plan the real marginal cost is quota, not dollars — but 38–42 turns for one small diff shows how much more an unbounded agent loop consumes than our single-pass design.
 
 **One further catch for the `code-review` plugin specifically.** Its pipeline requests Haiku, Sonnet and Opus subagents by tier name (§3.3). On a GLM endpoint those aliases must each be remapped with `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL`, or the tiering silently misroutes.
 
