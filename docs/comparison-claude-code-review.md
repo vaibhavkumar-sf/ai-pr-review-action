@@ -68,9 +68,9 @@ Offering #2's review behaviour is entirely prompt-driven. Its `docs/solutions.md
 > Only post GitHub comments - don't submit review text as messages.
 > ```
 
-That recipe is real, it runs unattended on `pull_request: [opened, synchronize]`, and — undocumented but verified in `action.yml` — it can run on our existing GLM plan, because the action passes `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS` and `ANTHROPIC_DEFAULT_{SONNET,HAIKU,OPUS}_MODEL` through from the job `env:`.
+That recipe is real, it runs unattended on `pull_request: [opened, synchronize]`, and it **can** be pointed at our GLM plan — see §3.2.1, which documents exactly how, and the trap that makes the obvious configuration fail silently.
 
-So the starting wheel is free and provider-portable. What it does **not** contain — and what you would be building and owning yourself, per repo, in prompt text with no guarantees — is the entire review-workflow layer: thread lifecycle, deduplication, severity taxonomy, re-run focus, reply verification, metrics, gating, JIRA. That layer is the product.
+So the starting wheel is free and, with effort, provider-portable. What it does **not** contain — and what you would be building and owning yourself, per repo, in prompt text with no guarantees — is the entire review-workflow layer: thread lifecycle, deduplication, severity taxonomy, re-run focus, reply verification, metrics, gating, JIRA. That layer is the product.
 
 ---
 
@@ -139,7 +139,7 @@ Columns: **Ours** · **OSS** = `claude-code-action` DIY prompt · **Plugin** = `
 
 | Capability | Ours | OSS | Plugin | Managed | Copilot |
 |---|:-:|:-:|:-:|:-:|:-:|
-| Works with our existing z.ai/GLM org endpoint | ✅ first-class, documented | 🟡 works via `ANTHROPIC_BASE_URL` env passthrough — **undocumented** | 🟡 same | ❌ Anthropic-billed only | ❌ |
+| Works with our existing z.ai/GLM‑5.2 keys | ✅ first-class, documented, validated inputs | 🟡 yes but **wholly undocumented and unsupported** — and z.ai's own documented variable (`ANTHROPIC_AUTH_TOKEN`) is silently dropped; see §3.2.1 | 🟡 same, plus Haiku/Sonnet/Opus tier remapping | ❌ Anthropic-billed only | ❌ |
 | Any OpenAI-compatible endpoint | ✅ dedicated `openai` dialect | 🟡 Anthropic-compatible base URLs only | 🟡 | ❌ | ❌ |
 | Bedrock / Vertex / Foundry | ❌ | ✅ (OIDC) | ✅ | ❌ (billed by Anthropic regardless) | ❌ |
 | Choose or even *know* the model | ✅ any, per repo | ✅ | ✅ | ❌ | ❌ *"Model switching is not supported"*; *"the model … is not disclosed"* |
@@ -206,6 +206,40 @@ Two guards short-circuit cleanly rather than failing: `> max_files_to_review` (d
 **The Haiku classifier — real, and narrower than it sounds.** `classify_inline_comments` (default true) buffers any inline comment posted *without* `confirmed: true`, then after the session ends classifies each with `claude-haiku-4-5` as real review feedback vs a test/probe call, and posts only the real ones. It **fails open** on every error path (no API key, non-200, unparseable) — which means **Bedrock/Vertex users, who have no direct Anthropic key, get no filtering at all.**
 
 **Genuinely ahead of us:** writes code and creates PRs, fixes bugs on request, interactive `@claude` Q&A, arbitrary cron/event automation, MCP servers, the skills/plugins ecosystem, Bedrock/Vertex/Foundry via OIDC, and **workload identity federation** — keyless GitHub-OIDC auth that removes the API-key secret entirely.
+
+#### 3.2.1 Can it run on our GLM‑5.2 keys? Yes — but nothing about it is documented, and the obvious configuration fails silently
+
+This matters because it is the strongest form of the "why not just use theirs?" question: if their action runs on our existing plan, provider flexibility is not our moat. Verified in detail:
+
+**Anthropic documents no third-party provider support at all.** The GitHub Actions page documents exactly five authentication paths — Anthropic API key, OAuth token, workload identity federation, Amazon Bedrock, Google Cloud — and the repo's `docs/usage.md` makes **no mention** of `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, custom endpoints, or non-Anthropic providers. There is no supported path, no compatibility statement, and no commitment not to break it.
+
+**It nonetheless works, through an undocumented passthrough.** `action.yml` forwards a fixed list of ~75 environment variables into the Claude CLI subprocess, and `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS` and `ANTHROPIC_DEFAULT_{SONNET,HAIKU,OPUS}_MODEL` are on it.
+
+**The trap.** `ANTHROPIC_AUTH_TOKEN` — the variable z.ai's own Claude Code documentation tells you to set — is **not** on that list. Neither is `API_TIMEOUT_MS`, which z.ai also recommends. And the action's `env:` block **shadows** the calling workflow's job-level environment; its own source comment says so:
+
+> *"these env vars are read directly from process.env by the Claude CLI subprocess. They must be listed explicitly here because this step's `env:` block shadows the calling workflow's job-level env vars (GitHub Actions composite action behavior)."*
+
+So copying z.ai's documented setup into a workflow produces a job that looks correctly configured and silently authenticates as nobody.
+
+**The configuration that actually works** (community-verified in `claude-code-action` discussion #673 and confirmed by the reporter) supplies the z.ai key through the `anthropic_api_key` **input** — which does reach the subprocess as `ANTHROPIC_API_KEY` — while the base URL goes through job-level `env:`:
+
+```yaml
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic   # passthrough works
+    steps:
+      - uses: actions/checkout@v6
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}     # NOT ANTHROPIC_AUTH_TOKEN
+          claude_args: --model glm-5.2
+```
+
+**One further catch for the `code-review` plugin specifically.** Its pipeline requests Haiku, Sonnet and Opus subagents by tier name (§3.3). On a GLM endpoint those aliases must each be remapped with `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL`, or the tiering silently misroutes.
+
+**Bottom line for the decision.** Provider portability is *achievable* on their action but is undocumented, unsupported, dependent on an env-var allow-list that Anthropic can change in any release, and requires knowing that the vendor's own documented variable is the wrong one. Ours takes `anthropic_auth_token` and `anthropic_base_url` as **first-class, validated, documented inputs**, adds a second `openai` wire dialect for endpoints that are not Anthropic-compatible, and supports a comma-separated model fallback chain. The capability gap is narrow; the **supportability** gap is not.
 
 **Verbatim from its own `docs/capabilities-and-limitations.md`, "What Claude Cannot Do":** *"Submit PR Reviews: Claude cannot submit formal GitHub PR reviews"* · *"Approve PRs: For security reasons, Claude cannot approve pull requests"* · *"Post Multiple Comments: Claude only acts by updating its initial comment"* · no cross-repo access · no Bash without allow-listing · *"Cannot merge branches, rebase, or perform other git operations beyond pushing commits."*
 
@@ -521,7 +555,9 @@ At our real volume, the managed service would cost roughly **\$270,000–450,000
 - https://code.claude.com/docs/en/code-review — managed service: \$15–25/review, 20-minute average, research preview, Team/Enterprise, no ZDR, 🔴/🟡/🟣 taxonomy, `REVIEW.md` levers, `bughunter-severity` check-run JSON, spend caps, analytics dashboard, July 2026 `@claude review always` change
 - https://code.claude.com/docs/en/ultrareview — 3 free runs, \$5–25, 5–10 minutes, 500 files / 8,000 lines, cannot post to a PR, silent downgrade on Bedrock/Vertex/Foundry/ZDR
 - https://code.claude.com/docs/en/commands — local `/code-review` flags, `--comment`, `/simplify` history
-- https://github.com/anthropics/claude-code-action — `action.yml` (39 inputs, 5 outputs, `ANTHROPIC_BASE_URL` passthrough), `docs/solutions.md` (8 recipes), `docs/capabilities-and-limitations.md`, `docs/usage.md`, `docs/setup.md` (workload identity federation), `src/mcp/github-inline-comment-server.ts`, `src/entrypoints/post-buffered-inline-comments.ts` (`claude-haiku-4-5` classifier)
+- https://github.com/anthropics/claude-code-action/discussions/673 — "Anyone tried using Claude Code GitHub Actions with Z.AI (GLM models)?" — the community-verified working configuration cited in §3.2.1
+- https://docs.z.ai/devpack/tool/claude — z.ai's own Claude Code setup: `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic` + `API_TIMEOUT_MS`, i.e. two of the three variables the action drops
+- https://github.com/anthropics/claude-code-action — `action.yml` (39 inputs, 5 outputs, the ~75-variable env allow-list — `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` present, `ANTHROPIC_AUTH_TOKEN` and `API_TIMEOUT_MS` absent), `docs/solutions.md` (8 recipes), `docs/capabilities-and-limitations.md`, `docs/usage.md`, `docs/setup.md` (workload identity federation), `src/mcp/github-inline-comment-server.ts`, `src/entrypoints/post-buffered-inline-comments.ts` (`claude-haiku-4-5` classifier)
 - https://github.com/anthropics/claude-code/blob/main/plugins/code-review/commands/code-review.md — the real 9-step pipeline; its `README.md` is stale
 - https://platform.claude.com/docs/en/about-claude/pricing — Opus 5 \$5/\$25, Fable 5 \$10/\$50, Sonnet 5 \$2/\$10 → \$3/\$15 on 2026‑09‑01, Haiku 4.5 \$1/\$5, ~30% tokenizer increase on 4.7+, batch −50%, caching, fast mode
 
