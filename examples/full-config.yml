@@ -1,4 +1,4 @@
-# Full configuration — all options shown
+# Full configuration — all 49 inputs shown (defaults noted in comments)
 name: AI Code Review (Full Config)
 
 on:
@@ -25,21 +25,29 @@ jobs:
           ai_provider: 'anthropic'
           anthropic_base_url: ${{ secrets.ANTHROPIC_BASE_URL }}
           # anthropic_model may be a comma-separated fallback chain (first accepted model wins)
-          anthropic_model: 'claude-opus-4-8'
-          max_tokens: '8192'
+          # default: 'glm-5.2'
+          anthropic_model: 'glm-5.2,claude-opus-5'
+          # model=input/output USD per MILLION tokens — enables the cost estimate in the summary comment
+          model_pricing: 'glm-5.2=1.4/4.4,claude-opus-5=5/25'
+          # 0 (default) = use the model's full native output capacity
+          max_tokens: '0'
+          # extended-thinking budget on top of max_tokens; 0 disables (default: 4096)
+          thinking_budget: '4096'
+          # total model context used for prompt trimming (default: 1000000)
+          context_window: '1000000'
           temperature: '0.2'
 
           # ─── Review Mode ──────────────────────────────────
           # combined (default): one exhaustive all-at-once review
-          # separate: 7 parallel specialist agents (profile/toggles apply)
+          # separate: up to 8 parallel specialist agents (profile/toggles apply)
           review_mode: 'combined'
 
           # ─── Review Profile (separate mode only) ──────────
-          # strict: all 7 agents | standard: 5 agents | minimal: 2 agents
+          # strict: all 8 agents | standard (default): 6 agents | minimal: 2 agents
           review_profile: 'strict'
 
           # ─── Individual Review Toggles (override profile) ─
-          # Set 'true' or 'false' to override the profile default
+          # Leave empty to follow the profile; set 'true' or 'false' to override
           # enable_security_review: 'true'
           # enable_code_quality_review: 'true'
           # enable_performance_review: 'true'
@@ -47,10 +55,15 @@ jobs:
           # enable_architecture_review: 'true'
           # enable_testing_review: 'true'
           # enable_api_design_review: 'true'
+          # enable_documentation_review: 'true'
 
           # ─── Framework ────────────────────────────────────
-          # auto | angular | loopback4 | both
+          # auto (default) | angular | loopback4 | both | generic
           framework: 'auto'
+
+          # ─── GitHub ───────────────────────────────────────
+          # Explicit PR to review; defaults to the triggering pull_request event
+          # pr_number: ''
 
           # ─── JIRA (optional, fault-tolerant) ──────────────
           # Uses same org-level secrets as ai-test-quality-analyzer
@@ -61,27 +74,46 @@ jobs:
 
           # ─── Behavior ────────────────────────────────────
           fail_on_critical: 'false'
-          fail_threshold: 'critical'
+          fail_threshold: 'critical'   # critical (default) | high | medium
           post_inline_comments: 'true'
           # Backstage tracker endpoint (optional) — see docs/backstage-integration.md
           post_data_url: ${{ secrets.AI_REVIEW_POST_DATA_URL }}
           # Verify human replies on review threads, reply with justification, resolve valid ones
           enable_reply_handling: 'true'
+          # Re-runs: new inline comments limited to critical/high + documentation; reopen
+          # regressed threads; keep the existing PR description and diagrams
+          enable_rerun_focus: 'true'
           # Collapse noisy recurring bot comments (keep latest of each type)
           enable_bot_comment_cleanup: 'true'
+          # PRs with more changed files are skipped (not failed)
           max_files_to_review: '50'
-          exclude_patterns: '**/package-lock.json,**/yarn.lock,**/*.bpmn,**/openapi.json,**/dist/**'
+          # Appended to the built-in defaults — never replaces them
+          exclude_patterns: '**/*.bpmn,**/fixtures/**'
+          # If set, ONLY these globs are reviewed
+          # include_patterns: 'src/**'
+          # Agentic local-repo tools (read_file, grep, find_references, list_dir), hard-capped
+          enable_context_tools: 'true'
+          # full (default) | imports-only | off
+          related_context: 'full'
 
           # ─── Prompt Customization ─────────────────────────
-          # system_prompt_override: ''  # Full replacement
+          # system_prompt_override: ''  # Full replacement of the built-in prompts
           system_prompt_append: 'Pay special attention to our custom error handling patterns.'
           angular_prompt_append: 'We use NgRx for state management. Check for proper action/reducer patterns.'
           loopback4_prompt_append: 'We use soft-delete mixin. Check that delete operations use soft delete.'
 
           # ─── Comment ──────────────────────────────────────
           comment_header: 'AI Code Review'
+          comment_footer: 'Questions? Ping #platform-engineering.'
+
+          # ─── Diagrams ─────────────────────────────────────
+          # Mermaid diagrams in the PR description, validated before posting
+          enable_diagrams: 'true'
 
           # ─── Advanced ─────────────────────────────────────
-          agent_timeout: '120'
+          # Per-AI-call timeout in seconds (default: 800); streaming calls survive to a 30-min hard cap
+          agent_timeout: '800'
           max_retries: '3'
+          # Neutral-exit cancellation if the PR closes or merges mid-review
+          cancel_on_pr_close: 'true'
           debug: 'false'

@@ -45,10 +45,11 @@ One JSON object per review run. All keys are snake_case.
   "review_mode": "combined",
   "review_profile": "standard",
   "framework": "loopback4",
-  "model_name": "claude-opus-4-8",
-  "ai_provider": "anthropic",
+  "model_name": "glm-5.2",
+  "ai_provider": "glm",
 
   "review_status": "completed",
+  "skip_reason": "",
   "review_passed": true,
   "total_findings": 23,
   "critical_count": 0,
@@ -105,6 +106,8 @@ Field notes:
 | `review_mode` | string | `combined` (single all-at-once agent) or `separate` (specialist agents) |
 | `review_profile` | string | Only meaningful when `review_mode` = `separate` |
 | `ai_provider` | string | Derived from `anthropic_base_url`: `anthropic`, `openrouter`, `glm`, or `custom` |
+| `review_status` | string | `completed`, `skipped`, `failed`, or `cancelled` |
+| `skip_reason` | string | Why a non-completed run ended: `too_many_files`, `no_agents`, `ai_unreachable`, `ai_call_failed`, `pr_closed`, `pr_merged`. Empty string on completed runs |
 | `*_count` (severity) | int | Counts after deduplication — sum equals `total_findings` |
 | `*_count` (category) | int | One counter per category; sum equals `total_findings`. Categories are always the 8 specialist ones — in combined mode each finding still carries its own category |
 | `average_score` | float | Mean of agent scores (0–10, one decimal). In combined mode this is the single comprehensive agent's score |
@@ -124,7 +127,7 @@ Field notes:
 | `findings[].suggestion` | string \| null | Free-text fix guidance |
 | `findings[].has_code_suggestion` | bool | Whether a committable GitHub suggestion was attached to the finding |
 
-The payload is not sent when the review is skipped (`too_many_files` / `no_agents`) — only completed reviews are reported.
+**Every run is reported, not just successful ones.** Skipped (`too_many_files`, `no_agents`), failed (`ai_unreachable`, `ai_call_failed`, uncaught error) and cancelled (`pr_closed`, `pr_merged`) runs all POST the same payload shape with zero counts, an empty `findings[]`, and `review_status` / `skip_reason` set — so the tracker records the complete picture, including the reviews that never produced findings.
 
 ### Re-review tracking — one row per run
 

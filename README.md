@@ -47,7 +47,7 @@ Notes on review behavior (both modes):
 
 ## What It Reviews
 
-Seven review dimensions, each with deep domain expertise (as one combined pass or parallel specialist agents):
+Eight review dimensions, each with deep domain expertise (as one combined pass or parallel specialist agents):
 
 | Category | What It Checks |
 |-------|---------------|
@@ -58,13 +58,14 @@ Seven review dimensions, each with deep domain expertise (as one combined pass o
 | Architecture | Layering, DI, circular deps, Angular/LB4 patterns |
 | Testing | Coverage gaps, edge cases, mock quality, test isolation |
 | API Design | REST conventions, status codes, validation, pagination, versioning |
+| Documentation | JSDoc on functions added/modified in the diff, model/DTO property descriptions — always severity `low`, with the complete doc block as a paste-ready suggestion |
 
 ## Review Profiles (separate mode only)
 
 | Profile | Agents | Use Case |
 |---------|--------|----------|
-| `strict` | All 7 | Production-critical repos, pre-release |
-| `standard` | Security, Quality, Performance, Types, Architecture | Day-to-day development (default) |
+| `strict` | All 8 | Production-critical repos, pre-release |
+| `standard` | Security, Quality, Performance, Types, Architecture, Documentation (6) | Day-to-day development (default) |
 | `minimal` | Security, Quality | Quick checks, high-velocity branches |
 
 Override any agent individually:
