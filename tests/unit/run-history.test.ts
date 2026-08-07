@@ -62,13 +62,19 @@ describe('renderRunBlock', () => {
     expect(md).toContain('Resolved threads reopen automatically');
   });
 
-  it('never lets a "--" in a finding escape the marker comment', () => {
+  /**
+   * A "--" inside an HTML comment terminates it, and GitHub then renders the
+   * rest of the body as visible text. RunMeta is numbers and a timestamp today,
+   * so nothing can carry one — this is a REGRESSION GUARD: it fails the moment
+   * someone adds a free-text or URL field to the marker payload without
+   * escaping it.
+   */
+  it('keeps the marker payload free of "--", whatever a finding contains', () => {
     const merged = makeMerged({
       findings: [makeFinding({ title: 'Bad -- flag -- here', description: 'uses --force --hard' })],
     });
     const md = block(1, { merged });
     const marker = md.split('\n')[0];
-    // Exactly one comment open and one close on the marker line.
     expect(marker.startsWith('<!--')).toBe(true);
     expect(marker.endsWith('-->')).toBe(true);
     expect(marker.slice(4, -3)).not.toContain('--');
