@@ -10,10 +10,21 @@ import { startPrStateWatcher } from '../github/pr-state-watcher';
 import { InlineReviewer } from '../github/inline-reviewer';
 import { ReplyHandler } from '../github/reply-handler';
 import { parseDiff } from '../github/diff-parser';
-import { consolidateFindings, deduplicateFindings, formatReviewComment, mergeResults } from '../results';
+import {
+  consolidateFindings,
+  deduplicateFindings,
+  formatFullReportComment,
+  formatReviewComment,
+  mergeResults,
+} from '../results';
 import { reportRunOutcome, reportToBackstage, RunActivityStats } from '../results/backstage-reporter';
 import { estimateCost, parseModelPricing } from '../results/cost';
-import { appendToPRDescription } from './description-updater';
+import {
+  DescriptionContent,
+  generateDescriptionContent,
+  resolveRunNumber,
+  writePRDescription,
+} from './description-updater';
 import { runPhase } from './phase';
 import { isTestFile } from '../config/patterns';
 import { ERROR_SNIPPET_CHARS } from '../config/limits';
@@ -57,9 +68,10 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
   const botCommentsHidden = await runPhase('Startup', { critical: false }, async () => {
     await commenter.postOrUpdateComment('## ⏳ AI Code Review\n\nReview starting... gathering context.');
     logger.info('Posted initial progress comment');
-    return config.enableBotCommentCleanup ? commenter.cleanupBotComments() : 0;
+    return config.enableBotCommentCleanup ? commenter.cleanupBotComments(config.botHidePatterns) : 0;
   }, 0);
-  core.setOutput('bot_comments_hidden', botCommentsHidden);
+  // Not set as an output yet — a second sweep runs late in the pipeline and the
+  // total of both is what gets reported.
 
   // ── Phase 2: AI pre-flight — verify the endpoint BEFORE expensive work ────
   // A hung or unreachable model should fail fast and loud here, not after a
@@ -209,15 +221,13 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
 
   // ── Phase 6: summary comment (critical — the review's main deliverable) ───
   // The completion marker makes the NEXT run detect this one as a prior
-  // completed review; the note tells developers why mediums aren't inline.
-  const rerunNote = isRerun
-    ? '\n\n<sub>🔁 Re-run focus: new inline comments are limited to critical/high findings and documentation suggestions; the totals above include all severities.</sub>'
-    : '';
+  // completed review. The comment itself is a stub: the full report lives in
+  // the PR description, one collapsible block per run, because a full report
+  // re-posted on every run buried the PR's actual conversation.
   const rerunNumber = isRerun ? commenter.rerunNumber() : 0;
-  // Suffix (re-run note + completion marker) is constant; only the metrics
-  // depth differs between the first post (no activity yet) and the final one.
-  const commentSuffix = rerunNote + `\n${REVIEW_COMPLETE_MARKER}`;
-  const finalComment = formatReviewComment(merged, config, context, rerunNumber) + commentSuffix;
+  const runNumber = await resolveRunNumber(octokit, config, rerunNumber);
+  const finalComment =
+    formatReviewComment(merged, config, runNumber, isRerun) + `\n${REVIEW_COMPLETE_MARKER}`;
   const { commentId, commentUrl } = await runPhase('Summary comment', { critical: true }, async () => {
     const posted = await commenter.postOrUpdateComment(finalComment);
     logger.info('Posted final review comment');
@@ -241,13 +251,24 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
   { staleThreadsResolved: 0, threadsReopened: 0, inlineCommentsNew: 0, inlineCommentsExisting: 0 });
   core.setOutput('threads_reopened', inline.threadsReopened);
 
-  // ── Phase 9: PR description + diagrams (best-effort) ──────────────────────
-  // Runs BEFORE the tracking metrics so the AI usage/cost figures below
-  // include the description + diagram calls.
-  await runPhase('PR description', { critical: false }, async () => {
-    await appendToPRDescription(octokit, config, merged, context, provider, isRerun);
-    return undefined;
-  }, undefined);
+  // ── Phase 9: AI description + diagrams (best-effort) ──────────────────────
+  // AI calls ONLY — the body is written in phase 11, once this run's metrics
+  // exist. Running the calls here keeps them inside the usage totals below.
+  const descriptionContent = await runPhase<DescriptionContent | null>('AI description', { critical: false }, () =>
+    generateDescriptionContent(octokit, config, merged, context, provider, isRerun),
+  null);
+
+  // ── Phase 10: second bot-comment sweep (best-effort) ──────────────────────
+  // The startup sweep only saw what existed when this run began. A review takes
+  // minutes, and other CI bots comment during that window — without this pass
+  // their noise waits for the NEXT review to be collapsed. Placed before the
+  // activity totals so the count reaches the metrics and the Backstage report,
+  // not just the log.
+  const lateHidden = await runPhase('Bot comment sweep', { critical: false }, () =>
+    config.enableBotCommentCleanup ? commenter.cleanupBotComments(config.botHidePatterns) : Promise.resolve(0),
+  0);
+  const botCommentsHiddenTotal = botCommentsHidden + lateHidden;
+  core.setOutput('bot_comments_hidden', botCommentsHiddenTotal);
 
   // All AI calls are done — total the run's usage and price it (client-side
   // estimate; USD covers only the models listed in model_pricing).
@@ -263,20 +284,30 @@ async function runPipeline(config: ActionConfig, octokit: Octokit, commenter: PR
     threadsReopened: inline.threadsReopened,
     repliesPosted: replyResult.repliesPosted,
     threadsResolvedFromReplies: replyResult.threadsResolved,
-    botCommentsHidden,
+    botCommentsHidden: botCommentsHiddenTotal,
     aiCalls: usageCost.totalCalls,
     aiInputTokens: usageCost.totalInputTokens,
     aiOutputTokens: usageCost.totalOutputTokens,
     estimatedCostUsd: usageCost.estimatedCostUsd,
   };
 
-  // ── Phase 10: re-post the summary with the full tracking metrics (best-effort) ──
-  // The metrics live near the top of the comment; the activity + AI-usage groups
-  // only exist now, so we re-render the whole comment rather than append.
-  await runPhase('Tracking metrics', { critical: false }, async () => {
-    const finalCommentWithMetrics =
-      formatReviewComment(merged, config, context, rerunNumber, activity) + commentSuffix;
-    await commenter.postOrUpdateComment(finalCommentWithMetrics);
+  // ── Phase 11: write the PR description (best-effort, with a real fallback) ──
+  // This body now carries the ONLY copy of the metrics and findings, so a
+  // failure here cannot be allowed to mean "a review with nothing to read".
+  // The fallback re-posts the full report into the comment instead.
+  await runPhase('PR description', { critical: false }, async () => {
+    try {
+      await writePRDescription(
+        octokit, config, merged, context, activity, descriptionContent, runNumber, isRerun,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      core.warning(`PR description update failed (${msg}) — posting the full report to the comment instead`);
+      await commenter.postOrUpdateComment(
+        formatFullReportComment(merged, config, context, activity, runNumber, isRerun) +
+        `\n${REVIEW_COMPLETE_MARKER}`,
+      );
+    }
     return undefined;
   }, undefined);
 

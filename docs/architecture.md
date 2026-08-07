@@ -196,13 +196,56 @@ gets a `::group::`-wrapped log section with duration and a declared criticality:
 | Guards (file count, no agents enabled) | gate | outputs `skipped` + `skip_reason`, Backstage `skipped`, clean exit |
 | Review agents | critical | rethrow (individual agent failures inside are tolerated via `Promise.allSettled`) |
 | Consolidation + merge | critical | rethrow (AI-consolidation failure inside falls back to programmatic dedup) |
-| Summary comment | critical | rethrow — a review nobody can see is a failed review |
-| Reply handling / inline comments / metrics / description / diagrams | best-effort | warn, continue |
+| Summary comment (stub) | critical | rethrow — a review nobody can see is a failed review |
+| Reply handling / inline comments / AI description / diagrams | best-effort | warn, continue |
+| Bot comment sweep (second pass) | best-effort | warn, continue |
+| PR description write | best-effort | warn, continue — **but** the report is re-posted to the comment via `formatFullReportComment`, since the description holds the only copy |
 | Outputs, Backstage report, job summary | best-effort | warn, continue |
 | Fail threshold (`fail_on_critical` / `fail_on_high`) | — | setFailed by configuration |
 
 A top-level catch in `runReview` guarantees Backstage receives a `failed` report
 (with the error reason) for any unhandled critical failure before the action exits.
+
+## Where the review report lives
+
+The full report — metrics, findings, agent results — is written into the **PR
+description**, not the summary comment. A full report re-posted on every run
+buried the PR's actual conversation, and the description's severity counts were
+frozen at whatever the first run found (the old updater returned early on every
+re-run).
+
+`src/results/run-history.ts` owns the layout: one collapsible block per run
+inside a `<!-- ai-pr-review-runs:start/end -->` region, newest open, older ones
+collapsed.
+
+- **History is carried forward verbatim.** Old blocks are never re-rendered. Each
+  is introduced by `<!-- ai-pr-review-run:N {json} -->`; the payload exists only
+  so a block can be collapsed to a one-line row without parsing rendered
+  markdown. `--` is escaped on the way in — a double hyphen would terminate the
+  HTML comment and spill the rest of the body as visible text.
+- **Only the latest run keeps All Findings and Agent Results.** They sit between
+  `<!-- ai-pr-review-run-detail:start/end -->` and are excised when a block is
+  demoted. This is the biggest single saving and is what keeps a long-lived PR
+  inside GitHub's 65,536-character body limit.
+- **Degradation ladder** when the budget is still exceeded: oldest full blocks
+  become one-line table rows → oldest rows are dropped with a visible "trimmed"
+  note → a single pathological run has its findings list truncated. Every step
+  that loses information says so; a silently truncated history reads as "these
+  are all the runs".
+- **A corrupt region is discarded, not repaired.** PR descriptions are
+  user-editable. If the region does not parse into well-formed blocks (missing
+  delimiter, unbalanced `<details>`, bad JSON) it is dropped and started fresh;
+  content outside the delimiters is never touched.
+- **Run numbering** is `max(highest N in the region, rerunNumber) + 1`, so it
+  survives someone deleting the bot's old comments.
+- **The inline-comment policy is restated in every block**, derived from
+  `RERUN_INLINE_SEVERITIES` / `RERUN_INLINE_CATEGORIES` so it cannot drift from
+  the gate that actually runs. It answers the question the old one-line note
+  did not: why a Low finding got no inline comment while a documentation nit did.
+
+The summary comment is now a stub carrying the run heading, counts, pass/fail,
+a pointer to the description, and `REVIEW_COMPLETE_MARKER` — the re-run signal,
+which is why the comment cannot simply be deleted.
 
 ## Observability standard
 

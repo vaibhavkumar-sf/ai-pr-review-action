@@ -346,14 +346,20 @@ export class PRCommenter {
 
   /**
    * Minimize noisy recurring bot comments on the PR:
-   * - Comments matching BOT_HIDE_ALL_PATTERNS are hidden on every occurrence.
+   * - Comments matching a hide pattern are hidden on every occurrence.
    * - Any other recurring bot comment type (grouped by bot login + first
    *   heading line) keeps only the latest occurrence; older ones are hidden.
    *
    * Our own marker comments are never touched (they're handled by
    * minimizeOldSummaryComments), and already-minimized comments are skipped.
+   *
+   * `hidePatterns` defaults to the built-ins; the orchestrator passes the
+   * built-ins plus whatever the consumer added via `bot_hide_patterns`.
+   *
+   * Called twice per run — once at startup, once near the end — because a
+   * review takes minutes and other CI bots comment during that window.
    */
-  async cleanupBotComments(): Promise<number> {
+  async cleanupBotComments(hidePatterns: readonly string[] = BOT_HIDE_ALL_PATTERNS): Promise<number> {
     let hidden = 0;
 
     try {
@@ -415,7 +421,7 @@ export class PRCommenter {
       const recurring = new Map<string, PrCommentNode[]>();
 
       for (const comment of botComments) {
-        if (BOT_HIDE_ALL_PATTERNS.some(pattern => comment.body.includes(pattern))) {
+        if (hidePatterns.some(pattern => comment.body.includes(pattern))) {
           toHide.push(comment);
           continue;
         }

@@ -179,6 +179,39 @@ export const PROMPT_CLAMP_FLOOR_TOKENS = 2000;
 /** Per-file content cap for the cosmetic PR-description prompt, in chars. */
 export const DESCRIPTION_FILE_CHARS = 5000;
 
+// ─── PR description budget ──────────────────────────────────────────────────
+// The full review report (metrics + findings, one block per run) lives in the
+// PR description, so the body has to be actively budgeted or GitHub rejects the
+// update outright.
+
+/** GitHub's hard limit on a PR body. Exceeding it fails the update with 422. */
+export const PR_BODY_MAX_CHARS = 65536;
+
+/** Headroom under PR_BODY_MAX_CHARS, absorbing the delimiters and joins that
+ *  are added after the region is sized. */
+export const PR_BODY_SAFETY_MARGIN_CHARS = 2000;
+
+/** Ceiling on the AI narrative + diagrams together, so run history always has
+ *  room no matter how verbose a description the model returns. */
+export const DESCRIPTION_CONTENT_MAX_CHARS = 20000;
+
+/** Full run blocks kept before the oldest start degrading to one-line rows.
+ *  Only the latest keeps its findings detail, so 15 is comfortably affordable. */
+export const RUN_HISTORY_MAX_RUNS = 15;
+
+/**
+ * Row cap on a run block's Critical & High table. That table sits OUTSIDE the
+ * collapsible detail section (it is the part worth keeping when a run is
+ * demoted), so nothing else bounds it — an unlucky run with hundreds of high
+ * findings would put a ~90k table into every historical block.
+ */
+export const SEVERE_TABLE_MAX_ROWS = 25;
+
+// NOTE: there is deliberately no per-block size constant. Whether a run keeps
+// its findings detail is decided against the REMAINING body budget in
+// run-history.ts, not a fixed number — a constant here truncated ordinary
+// 16-finding runs that had ~50k of body budget still unused.
+
 /** Dependency-file content cap, in chars (avoids token bloat from large deps). */
 export const DEP_FILE_MAX_CHARS = 5000;
 

@@ -1,57 +1,11 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
-exports[`formatReviewComment snapshot renders a passing zero-findings comment in separate mode 1`] = `
-"## AI Code Review
-
-> **Model:** \`glm-5.2\` | **Mode:** \`separate\` | **Profile:** \`standard\` | **Duration:** 2m 34s
-
-### 📊 Tracking Metrics
-
-#### Findings by Severity — 0 total
-
-| 🛑 Critical | 🔴 High | 🟡 Medium | 🟢 Low | 💬 Nit | **Total** |
-|:-:|:-:|:-:|:-:|:-:|:-:|
-| 0 | 0 | 0 | 0 | 0 | **0** |
-
-#### Findings by Category — 0 total
-
-| 🔒 Security | 📝 Code Quality | ⚡ Performance | 🔍 Type Safety | 🏗️ Architecture | 🧪 Testing | 🔌 API Design | 📚 Documentation | **Total** |
-|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-
-> ✅ **Review passed** — no findings above the configured threshold.
-
-<details>
-<summary><strong>Agent Results</strong></summary>
-
-| Agent | Score | Findings | Duration | Status |
-|-------|-------|----------|----------|--------|
-| security | 9/10 | 0 | 2m 34s | ✅ Complete |
-| testing | N/A | 0 | 2m 34s | ❌ Failed |
-
-**security:** Solid change overall.
-
-</details>
-
-<details>
-<summary><strong>Strengths</strong></summary>
-
-- **security** (9/10): Solid change overall.
-
-</details>
-
----
-Custom footer
-
----
-<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>
-"
-`;
-
-exports[`formatReviewComment snapshot renders the final comment with the activity + AI-usage groups at the top 1`] = `
-"## AI Code Review
+exports[`formatFullReportComment carries the entire report plus an explanation of why it is here 1`] = `
+"## AI Code Review — Run #3
 
 > **Model:** \`glm-5.2\` | **Mode:** \`combined\` | **Duration:** 2m 34s
+
+> ⚠️ The PR description could not be updated, so the full report is posted here instead.
 
 ### 📊 Tracking Metrics
 
@@ -160,98 +114,31 @@ No unit test covers UserRepo.
 "
 `;
 
-exports[`formatReviewComment snapshot renders the full summary comment for a combined-mode run 1`] = `
-"## AI Code Review
+exports[`formatReviewComment snapshot renders a passing zero-findings stub in separate mode 1`] = `
+"## AI Code Review — Run #1
 
-> **Model:** \`glm-5.2\` | **Mode:** \`combined\` | **Duration:** 2m 34s
-
-### 📊 Tracking Metrics
-
-#### Findings by Severity — 3 total
-
-| 🛑 Critical | 🔴 High | 🟡 Medium | 🟢 Low | 💬 Nit | **Total** |
-|:-:|:-:|:-:|:-:|:-:|:-:|
-| 0 | 1 | 1 | 0 | 1 | **3** |
-
-#### Findings by Category — 3 total
-
-| 🔒 Security | 📝 Code Quality | ⚡ Performance | 🔍 Type Safety | 🏗️ Architecture | 🧪 Testing | 🔌 API Design | 📚 Documentation | **Total** |
-|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 1 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | **3** |
-
+> **0 findings** · 0 critical · 0 high · \`glm-5.2\` · \`separate\` · \`standard\` · 2m 34s
+>
 > ✅ **Review passed** — no findings above the configured threshold.
-
-### Critical & High Issues
-
-| Severity | File | Title | Description |
-|----------|------|-------|-------------|
-| 🔴 High | \`src/service/user.service.ts:2\` | Missing input validation | The id parameter is not validated before use. |
-
-<details>
-<summary><strong>All Findings (3)</strong></summary>
-
-#### 🔴 High: Missing input validation
-\`src/service/user.service.ts:2\`
-
-The id parameter is not validated before use.
-
-> **Suggestion:** Validate the id parameter.
+>
+> 📋 Full report — metrics, every finding, and all previous runs — is in the **PR description**.
 
 ---
-
-#### 🟡 Medium: Inline return type
-\`src/service/user.service.ts:3\`
-
-Extract the inline return type to a named interface.
-
-> **Suggestion:** Validate the id parameter.
-
-\`\`\`suggestion
-  getUser(id: string): UserDto {
-\`\`\`
+Custom footer
 
 ---
+<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>
+"
+`;
 
-#### 💬 Nit: Missing test for repo
-\`src/service/user.repo.ts:1\`
+exports[`formatReviewComment snapshot renders the stub comment for a combined-mode first run 1`] = `
+"## AI Code Review — Run #1
 
-No unit test covers UserRepo.
-
----
-
-</details>
-
-<details>
-<summary><strong>JIRA Context</strong></summary>
-
-- **Ticket:** [TEL-101](https://jira.example.test/browse/TEL-101)
-- **Summary:** User CRUD endpoints
-- **Status:** In Progress
-- **Type:** Story
-- **Priority:** High
-
-**Acceptance Criteria:**
-- endpoints exist
-
-</details>
-
-<details>
-<summary><strong>Agent Results</strong></summary>
-
-| Agent | Score | Findings | Duration | Status |
-|-------|-------|----------|----------|--------|
-| comprehensive | 8/10 | 3 | 2m 34s | ✅ Complete |
-
-**comprehensive:** Solid change overall.
-
-</details>
-
-<details>
-<summary><strong>Strengths</strong></summary>
-
-- **comprehensive** (8/10): Solid change overall.
-
-</details>
+> **3 findings** · 0 critical · 1 high · \`glm-5.2\` · \`combined\` · 2m 34s
+>
+> ✅ **Review passed** — no findings above the configured threshold.
+>
+> 📋 Full report — metrics, every finding, and all previous runs — is in the **PR description**.
 
 ---
 <sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>

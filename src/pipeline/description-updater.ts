@@ -5,10 +5,19 @@ import { AIProvider } from '../providers/ai-provider';
 import { generateDiagramImages } from '../results/image-diagram-generator';
 import { sanitizeMermaidBlocks, validateAndStripBrokenMermaid } from '../utils/mermaid';
 import { loadPrompt } from '../prompts/loader';
-import { SEVERITY_ICONS } from '../config/taxonomy';
+import {
+  buildRunsSection,
+  highestRecordedRun,
+  renderRunBlock,
+  RUNS_HEADING,
+  RUNS_REGION_END,
+  RUNS_REGION_START,
+} from '../results/run-history';
+import { RunActivityStats } from '../results/backstage-reporter';
 import {
   COSMETIC_CALL_TIMEOUT_MS,
   COSMETIC_TEMPERATURE,
+  DESCRIPTION_CONTENT_MAX_CHARS,
   DESCRIPTION_FILE_CHARS,
   DESCRIPTION_MAX_TOKENS,
 } from '../config/limits';
@@ -16,46 +25,42 @@ import { logger } from '../utils/logger';
 
 const AI_DESCRIPTION_SEPARATOR = '----AI-description----';
 
+/** Superseded by the Review Runs region; stripped from bodies written by
+ *  earlier versions so the stale one-off table does not linger. */
+const LEGACY_SUMMARY_RE = /###\s*Review Summary[\s\S]*?<sub>Last reviewed:[^<]*<\/sub>\s*/;
+
+/** The AI-written half of the description. Generated once per PR, not per run. */
+export interface DescriptionContent {
+  narrative: string;
+  diagrams: string;
+}
+
 /**
- * Uses the AI to generate a detailed PR description with Mermaid diagrams,
- * then appends it below the ----AI-description---- separator.
- * Everything above the separator (user's manual description) is preserved.
+ * Phase 9: the AI calls only — narrative + Mermaid diagrams. Nothing is written
+ * here, because the body also has to carry this run's metrics, and those do not
+ * exist until every AI call is accounted for.
  *
- * Re-runs keep the first run's description and diagrams untouched (2 fewer AI
- * calls per re-run; the PR's purpose rarely changes between fix-pushes) —
- * unless no AI section exists yet (a first run whose description phase
- * failed), in which case it is generated now.
+ * Returns `null` on a re-run that already has an AI section: the PR's purpose
+ * rarely changes between fix-pushes, and skipping it saves two AI calls per
+ * re-run. `writePRDescription` then carries the existing content forward.
  */
-export async function appendToPRDescription(
+export async function generateDescriptionContent(
   octokit: Octokit,
   config: ActionConfig,
   merged: MergedReviewResult,
   context: ReviewContext,
   provider: AIProvider,
   isRerun = false,
-): Promise<void> {
-  const { data: pr } = await octokit.pulls.get({
-    owner: config.owner,
-    repo: config.repo,
-    pull_number: config.prNumber,
-  });
+): Promise<DescriptionContent | null> {
+  const existingBody = await fetchBody(octokit, config);
+  const hasAiSection = existingBody.includes(AI_DESCRIPTION_SEPARATOR);
 
-  const existingBody = pr.body || '';
-
-  // Split on the separator — keep everything above it
-  const separatorIndex = existingBody.indexOf(AI_DESCRIPTION_SEPARATOR);
-  const userDescription = separatorIndex >= 0
-    ? existingBody.substring(0, separatorIndex).trimEnd()
-    : existingBody.trimEnd();
-
-  if (isRerun && separatorIndex >= 0) {
-    logger.info('Re-run: keeping existing PR description and diagrams');
-    return;
+  if (isRerun && hasAiSection) {
+    logger.info('Re-run: keeping the existing PR description and diagrams');
+    return null;
   }
 
-  // Generate AI description + Mermaid diagram via AI call
-  let aiGeneratedContent = '';
-
+  let narrative: string;
   try {
     const response = await provider.chat(
       [
@@ -71,22 +76,20 @@ export async function appendToPRDescription(
         thinkingBudget: 0,
       },
     );
-    aiGeneratedContent = sanitizeMermaidBlocks(response.content);
+    narrative = sanitizeMermaidBlocks(response.content);
     // Validate mermaid blocks via Kroki — strip any that fail parsing
-    aiGeneratedContent = await validateAndStripBrokenMermaid(aiGeneratedContent);
+    narrative = await validateAndStripBrokenMermaid(narrative);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     core.warning(`Failed to generate AI description: ${msg}`);
-    // Fall back to static summary
-    aiGeneratedContent = buildFallbackDescription(context);
+    narrative = buildFallbackDescription(context);
   }
 
-  // Generate rich Mermaid diagrams (rendered natively by GitHub)
-  let diagramsMarkdown = '';
+  let diagrams = '';
   if (config.enableDiagrams) {
     try {
-      diagramsMarkdown = await generateDiagramImages(context, merged, provider);
-      if (diagramsMarkdown) {
+      diagrams = await generateDiagramImages(context, merged, provider);
+      if (diagrams) {
         logger.info('Generated Mermaid diagrams for PR description');
       }
     } catch (err) {
@@ -95,73 +98,158 @@ export async function appendToPRDescription(
     }
   }
 
-  // If diagram generation failed but existing description already has diagrams,
-  // carry them forward instead of losing them
-  if (!diagramsMarkdown && separatorIndex >= 0) {
-    const existingAiSection = existingBody.substring(separatorIndex);
-    const existingDiagramMatch = existingAiSection.match(/## Diagrams[\s\S]*?(?=## (?!#)|$)/);
-    if (existingDiagramMatch) {
-      diagramsMarkdown = existingDiagramMatch[0].replace(/^## Diagrams\s*\n?/, '').trim();
-      if (diagramsMarkdown) {
-        logger.info('Preserved existing diagrams from previous run');
-      }
-    }
+  // Diagram generation can fail after a previous run succeeded — carry those
+  // forward rather than losing them.
+  if (!diagrams && hasAiSection) {
+    diagrams = extractExistingDiagrams(existingBody);
+    if (diagrams) logger.info('Preserved existing diagrams from a previous run');
   }
 
-  // Remove the AI-generated Architecture mermaid section since we have dedicated diagrams
-  if (diagramsMarkdown) {
-    aiGeneratedContent = aiGeneratedContent.replace(/## Architecture[\s\S]*?(?=## |$)/, '');
+  // The dedicated diagrams supersede whatever the model put under ## Architecture.
+  if (diagrams) {
+    narrative = narrative.replace(/## Architecture[\s\S]*?(?=## |$)/, '');
   }
 
-  // Build final section
-  const aiParts: string[] = [];
-  aiParts.push('');
-  aiParts.push(AI_DESCRIPTION_SEPARATOR);
-  aiParts.push('');
+  return { narrative: narrative.trim(), diagrams: diagrams.trim() };
+}
 
-  // Rich Mermaid diagrams (rendered natively by GitHub)
-  if (diagramsMarkdown) {
-    aiParts.push('## Diagrams');
+/**
+ * Phase 10: composes and writes the whole body. Runs AFTER the run's activity
+ * and AI-usage totals are known, so the metrics in the description are this
+ * run's — the previous design wrote the description first and left the counts
+ * frozen at whatever the first run found.
+ */
+export async function writePRDescription(
+  octokit: Octokit,
+  config: ActionConfig,
+  merged: MergedReviewResult,
+  context: ReviewContext,
+  activity: RunActivityStats,
+  content: DescriptionContent | null,
+  runNumber: number,
+  isRerun: boolean,
+): Promise<void> {
+  const existingBody = await fetchBody(octokit, config);
+
+  const separatorIndex = existingBody.indexOf(AI_DESCRIPTION_SEPARATOR);
+  const userDescription = separatorIndex >= 0
+    ? existingBody.substring(0, separatorIndex).trimEnd()
+    : existingBody.trimEnd();
+
+  // On a re-run the AI content is not regenerated — recover it from the body.
+  const narrative = content ? content.narrative : extractExistingNarrative(existingBody);
+  const diagrams = content ? content.diagrams : extractExistingDiagrams(existingBody);
+
+  const aiParts: string[] = ['', AI_DESCRIPTION_SEPARATOR, ''];
+
+  if (diagrams) {
+    // Open by default so reviewers see the architecture immediately, but
+    // foldable so they can skip past it to the narrative in one click. The
+    // blank line after </summary> is required or GitHub will not render the
+    // mermaid fence inside the <details>.
+    aiParts.push('<details open>');
+    aiParts.push('<summary><strong>🧭 Diagrams</strong></summary>');
     aiParts.push('');
-    aiParts.push(diagramsMarkdown);
+    aiParts.push(diagrams);
+    aiParts.push('');
+    aiParts.push('</details>');
     aiParts.push('');
   }
 
-  aiParts.push(aiGeneratedContent);
+  aiParts.push(narrative);
   aiParts.push('');
 
-  // JIRA context
   if (context.jiraContext) {
     aiParts.push(`**JIRA:** [${context.jiraContext.ticketId}](${context.jiraContext.ticketUrl}) — ${context.jiraContext.summary}`);
     aiParts.push('');
   }
 
-  // Review summary table
-  aiParts.push('### Review Summary');
-  aiParts.push('');
-  aiParts.push('| Severity | Count |');
-  aiParts.push('|----------|-------|');
-  if (merged.criticalCount > 0) aiParts.push(`| ${SEVERITY_ICONS.critical} Critical | ${merged.criticalCount} |`);
-  if (merged.highCount > 0) aiParts.push(`| ${SEVERITY_ICONS.high} High | ${merged.highCount} |`);
-  if (merged.mediumCount > 0) aiParts.push(`| ${SEVERITY_ICONS.medium} Medium | ${merged.mediumCount} |`);
-  if (merged.lowCount > 0) aiParts.push(`| ${SEVERITY_ICONS.low} Low | ${merged.lowCount} |`);
-  if (merged.nitCount > 0) aiParts.push(`| ${SEVERITY_ICONS.nit} Nit | ${merged.nitCount} |`);
-  if (merged.totalFindings === 0) aiParts.push('| ✅ None | 0 |');
-  aiParts.push(`| **Total** | **${merged.totalFindings}** |`);
-  aiParts.push('');
-  const profileMeta = config.reviewMode === 'separate' ? ` | Profile: ${config.reviewProfile}` : '';
-  aiParts.push(`<sub>Last reviewed: ${new Date().toISOString()} | Model: ${config.anthropicModel} | Mode: ${config.reviewMode}${profileMeta}</sub>`);
+  let head = userDescription + '\n' + aiParts.join('\n');
+  // The narrative is model-generated and unbounded; clamp it here so the run
+  // history always has room. The user's own description is never touched.
+  if (head.length - userDescription.length > DESCRIPTION_CONTENT_MAX_CHARS) {
+    core.warning('AI description exceeded its budget — truncating so run history still fits');
+    head = head.slice(0, userDescription.length + DESCRIPTION_CONTENT_MAX_CHARS) +
+      '\n\n<sub>Description truncated to fit GitHub\'s PR body limit.</sub>\n';
+  }
 
-  const newBody = userDescription + '\n' + aiParts.join('\n');
+  const block = renderRunBlock(runNumber, merged, config, context, activity, isRerun, new Date());
+  const runsSection = buildRunsSection(block, existingBody, head.length);
 
   await octokit.pulls.update({
     owner: config.owner,
     repo: config.repo,
     pull_number: config.prNumber,
-    body: newBody,
+    body: `${head}\n${runsSection}\n`,
   });
-  logger.info('Updated PR description with AI summary');
+  logger.info(`Updated PR description with the Run #${runNumber} report`);
 }
+
+/**
+ * This run's 1-based ordinal. `rerunNumber` counts completed-review comments,
+ * which a housekeeping delete can wipe out; the description's own run markers
+ * survive that, so take whichever is higher.
+ */
+export async function resolveRunNumber(
+  octokit: Octokit,
+  config: ActionConfig,
+  rerunNumber: number,
+): Promise<number> {
+  try {
+    const body = await fetchBody(octokit, config);
+    return Math.max(highestRecordedRun(body), rerunNumber) + 1;
+  } catch {
+    return rerunNumber + 1;
+  }
+}
+
+async function fetchBody(octokit: Octokit, config: ActionConfig): Promise<string> {
+  const { data: pr } = await octokit.pulls.get({
+    owner: config.owner,
+    repo: config.repo,
+    pull_number: config.prNumber,
+  });
+  return pr.body || '';
+}
+
+/** The AI narrative: everything between the separator and the runs region. */
+function extractExistingNarrative(body: string): string {
+  const separatorIndex = body.indexOf(AI_DESCRIPTION_SEPARATOR);
+  if (separatorIndex < 0) return '';
+
+  let section = body.substring(separatorIndex + AI_DESCRIPTION_SEPARATOR.length);
+  const headingIndex = section.indexOf(RUNS_HEADING);
+  const regionIndex = section.indexOf(RUNS_REGION_START);
+  const cut = headingIndex >= 0 ? headingIndex : regionIndex;
+  if (cut >= 0) section = section.substring(0, cut);
+
+  // Drop the diagrams (re-emitted separately) and any legacy summary table.
+  section = section.replace(/<details open>\s*<summary><strong>🧭 Diagrams<\/strong><\/summary>[\s\S]*?<\/details>/, '');
+  section = section.replace(/## Diagrams[\s\S]*?(?=## (?!#)|$)/, '');
+  section = section.replace(LEGACY_SUMMARY_RE, '');
+  section = section.replace(/\*\*JIRA:\*\*[^\n]*\n/, '');
+  return section.trim();
+}
+
+/** Diagrams from a previous run, in either the current or the legacy layout. */
+function extractExistingDiagrams(body: string): string {
+  const wrapped = body.match(
+    /<details open>\s*<summary><strong>🧭 Diagrams<\/strong><\/summary>\s*([\s\S]*?)\s*<\/details>\s*(?=\n)/,
+  );
+  if (wrapped) return wrapped[1].trim();
+
+  const separatorIndex = body.indexOf(AI_DESCRIPTION_SEPARATOR);
+  if (separatorIndex < 0) return '';
+  const legacy = body.substring(separatorIndex).match(/## Diagrams[\s\S]*?(?=## (?!#)|$)/);
+  return legacy ? legacy[0].replace(/^## Diagrams\s*\n?/, '').trim() : '';
+}
+
+/** Exported for tests: the region delimiters must round-trip through a write. */
+export const DESCRIPTION_MARKERS = {
+  separator: AI_DESCRIPTION_SEPARATOR,
+  runsStart: RUNS_REGION_START,
+  runsEnd: RUNS_REGION_END,
+};
 
 function buildDescriptionUserPrompt(context: ReviewContext): string {
   let user = `## PR Information\n`;

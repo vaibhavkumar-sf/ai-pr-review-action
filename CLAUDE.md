@@ -67,11 +67,14 @@ See `docs/architecture.md` for the full map, fail-safety table, provider matrix,
 - Individual agent failures inside the agents phase are tolerated (`Promise.allSettled`); consolidation-AI failure falls back to programmatic dedup; description-AI failure falls back to a static description.
 
 ### Comments strategy
-- **Summary comment:** one fixed comment per run; old ones minimized (not deleted) via GraphQL `minimizeComment(classifier: OUTDATED)`.
+- **Summary comment:** a STUB — run heading, counts, pass/fail, a pointer to the description, and the completion marker. One per run; old ones minimized (not deleted) via GraphQL `minimizeComment(classifier: OUTDATED)`.
+- **The full report lives in the PR description** (`src/results/run-history.ts`): one collapsible block per run, newest open, older collapsed. Old blocks are carried forward verbatim — never re-rendered. Only the latest keeps All Findings/Agent Results; demotion strips them. Budgeted against GitHub's 65,536-char body limit via a degradation ladder (full block → one-line row → dropped, always with a visible note). A malformed region is discarded and restarted, never repaired.
 - **Inline comments:** per finding via the Review API (`line` + `side: 'RIGHT'`), ALL severities on first runs, never on test files.
 - **Re-run focus** (`enable_rerun_focus`, default on): once a completed review exists on the PR (hidden `REVIEW_COMPLETE_MARKER` in the summary), re-runs post NEW inline comments for critical/high plus documentation-category findings only (other mediums/lows still found and counted in the summary), reopen resolved threads whose critical/high issue reappeared (templated reply, no AI call, never after an accepted human justification), and keep the existing PR description/diagrams.
 - **Stale threads:** auto-resolved when fixed (skipping threads with unanswered human replies). Resolve/unresolve mutations need the workflow to grant `contents: write` (GitHub requires push access for PR conversations); with `contents: read` they fail with "Resource not accessible by integration" — surfaced as a once-per-run warning with remediation.
-- **Tracking metrics:** grouped tables (by severity / by category / review activity), each with its own total.
+- **Tracking metrics:** grouped tables (by severity / by category / review activity / AI usage), each with its own total — rendered inside every run block.
+- **Inline policy note:** each run block restates which severities got inline comments and why the rest did not, derived from `RERUN_INLINE_SEVERITIES`/`RERUN_INLINE_CATEGORIES` so it cannot drift from the gate.
+- **Bot comment cleanup** runs TWICE per run — at startup and again near the end — because other CI bots comment during our multi-minute run. `bot_hide_patterns` appends to `BOT_HIDE_ALL_PATTERNS`.
 - **Finding counts:** only shown after consolidation, never during progress.
 
 ### Deduplication — two passes

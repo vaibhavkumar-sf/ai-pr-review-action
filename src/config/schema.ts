@@ -255,6 +255,13 @@ export const INPUTS: readonly InputSpec[] = [
     description: 'Comma-separated glob patterns to exclude (appended to built-in defaults: package-lock, openapi.json, migrations, .bpmn, dist, node_modules, .d.ts, etc.)',
   },
   {
+    name: 'bot_hide_patterns',
+    type: 'csv',
+    default: '',
+    group: 'Behavior Flags',
+    description: 'Comma-separated phrases identifying noisy bot comments to always collapse (appended to built-in defaults: unit-test-quality reports). A bot comment whose body contains any of these is minimized on every run, instead of only keeping its latest occurrence. Requires enable_bot_comment_cleanup',
+  },
+  {
     name: 'include_patterns',
     type: 'csv',
     default: '',
