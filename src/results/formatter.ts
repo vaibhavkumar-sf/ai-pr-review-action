@@ -10,62 +10,160 @@ import { STRENGTHS_MIN_SCORE, TABLE_DESCRIPTION_CHARS } from '../config/limits';
 import { formatDuration } from '../utils/text';
 
 /**
- * Formats the merged review result into a markdown comment for posting on the PR.
+ * The summary comment: a compact stub. The full report — metrics, findings,
+ * agent results, and every previous run — lives in the PR description
+ * (`results/run-history.ts`), because a full report re-posted per run buried
+ * the PR's actual conversation. The comment stays because it carries
+ * REVIEW_COMPLETE_MARKER (the re-run signal) and is what shows in the timeline.
+ *
+ * `runNumber` is the true 1-based ordinal of this run, matching the heading of
+ * the block written into the description.
  */
 export function formatReviewComment(
   result: MergedReviewResult,
   config: ActionConfig,
-  context: ReviewContext,
-  rerunNumber = 0,
-  activity?: RunActivityStats,
+  runNumber = 1,
+  isRerun = false,
 ): string {
   const parts: string[] = [];
 
-  // Header (no marker here — postOrUpdateComment adds it). On a re-run we suffix
-  // the title with the re-run number so readers can tell at a glance this is a
-  // focused re-review and how many times the PR has been re-reviewed.
   const statusIcon = result.passed ? '✅' : '❌';
   const baseHeader = config.commentHeader || `${statusIcon} AI Code Review`;
-  const headerText = rerunNumber > 0 ? `${baseHeader} — Re-run #${rerunNumber}` : baseHeader;
-  parts.push(`## ${headerText}`);
+  parts.push(`## ${baseHeader} — Run #${runNumber}`);
   parts.push('');
 
-  // Meta information
+  const profileMeta = config.reviewMode === 'separate' ? ` · \`${config.reviewProfile}\`` : '';
+  const severe = `${result.criticalCount} critical · ${result.highCount} high`;
+  parts.push(
+    `> **${result.totalFindings} findings** · ${severe} · \`${config.anthropicModel}\` · ` +
+    `\`${config.reviewMode}\`${profileMeta} · ${formatDuration(result.durationMs)}`,
+  );
+  parts.push('>');
+  if (result.passed) {
+    parts.push('> ✅ **Review passed** — no findings above the configured threshold.');
+  } else {
+    parts.push(`> ❌ **Review failed** — findings above the \`${config.failThreshold}\` threshold detected.`);
+  }
+  parts.push('>');
+  parts.push('> 📋 Full report — metrics, every finding, and all previous runs — is in the **PR description**.');
+  parts.push('');
+
+  if (isRerun) {
+    parts.push(
+      '<sub>🔁 Re-run: new inline comments are limited to critical/high findings and documentation ' +
+      'suggestions. Medium/low/nit findings were still detected and are counted in the description.</sub>',
+    );
+    parts.push('');
+  }
+
+  if (config.commentFooter) {
+    parts.push('---');
+    parts.push(config.commentFooter);
+    parts.push('');
+  }
+
+  parts.push('---');
+  parts.push(
+    '<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>',
+  );
+  parts.push('');
+
+  return parts.join('\n');
+}
+
+/**
+ * The whole report in one comment — metrics, severe issues, every finding,
+ * agent results. Used ONLY when writing the PR description failed: the
+ * description is normally the single home for this, and a failed write must
+ * not leave a review with nothing to read.
+ */
+export function formatFullReportComment(
+  result: MergedReviewResult,
+  config: ActionConfig,
+  context: ReviewContext,
+  activity: RunActivityStats,
+  runNumber: number,
+  isRerun: boolean,
+): string {
+  const statusIcon = result.passed ? '✅' : '❌';
+  const baseHeader = config.commentHeader || `${statusIcon} AI Code Review`;
   const profileMeta = config.reviewMode === 'separate' ? ` | **Profile:** \`${config.reviewProfile}\`` : '';
+
+  const parts: string[] = [];
+  parts.push(`## ${baseHeader} — Run #${runNumber}`);
+  parts.push('');
   parts.push(`> **Model:** \`${config.anthropicModel}\` | **Mode:** \`${config.reviewMode}\`${profileMeta} | **Duration:** ${formatDuration(result.durationMs)}`);
   parts.push('');
-
-  // The tracking-metrics block is the single home for severity/category counts
-  // (no separate "Summary" table — it duplicated these). The activity + AI-usage
-  // groups only render once those stats exist (the final post); the first post
-  // shows the severity/category breakdown alone.
+  parts.push('> ⚠️ The PR description could not be updated, so the full report is posted here instead.');
+  parts.push('');
   parts.push(formatTrackingMetrics(result, config, activity).trimStart());
-
-  // Pass/fail status
   if (result.passed) {
     parts.push('> ✅ **Review passed** — no findings above the configured threshold.');
   } else {
     parts.push(`> ❌ **Review failed** — findings above the \`${config.failThreshold}\` threshold detected.`);
   }
   parts.push('');
+  const severeTable = formatSevereFindingsTable(result);
+  if (severeTable) {
+    parts.push(severeTable.replace('**Critical & High Issues**', '### Critical & High Issues'));
+  }
+  parts.push(formatFindingsDetail(result, context));
 
-  // Critical & High issues table
-  const severeFindings = result.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
-  if (severeFindings.length > 0) {
-    parts.push('### Critical & High Issues');
-    parts.push('');
-    parts.push('| Severity | File | Title | Description |');
-    parts.push('|----------|------|-------|-------------|');
-    for (const f of severeFindings) {
-      const sevLabel = `${SEVERITY_ICONS[f.severity]} ${SEVERITY_LABELS[f.severity]}`;
-      const fileLink = f.file ? `\`${f.file}:${f.line}\`` : 'N/A';
-      const desc = truncate(f.description, TABLE_DESCRIPTION_CHARS);
-      parts.push(`| ${sevLabel} | ${fileLink} | ${escapeMarkdownTable(f.title)} | ${escapeMarkdownTable(desc)} |`);
-    }
+  if (isRerun) {
+    parts.push(
+      '<sub>🔁 Re-run: new inline comments are limited to critical/high findings and documentation ' +
+      'suggestions; the totals above include all severities.</sub>',
+    );
     parts.push('');
   }
+  if (config.commentFooter) {
+    parts.push('---');
+    parts.push(config.commentFooter);
+    parts.push('');
+  }
+  parts.push('---');
+  parts.push(
+    '<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>',
+  );
+  parts.push('');
+  return parts.join('\n');
+}
 
-  // All findings (collapsible)
+/**
+ * The Critical & High table. Kept for EVERY run block in the description —
+ * it is small and it is the part with historical value.
+ */
+export function formatSevereFindingsTable(result: MergedReviewResult): string {
+  const severeFindings = result.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
+  if (severeFindings.length === 0) return '';
+
+  const parts: string[] = [];
+  parts.push('**Critical & High Issues**');
+  parts.push('');
+  parts.push('| Severity | File | Title | Description |');
+  parts.push('|----------|------|-------|-------------|');
+  for (const f of severeFindings) {
+    const sevLabel = `${SEVERITY_ICONS[f.severity]} ${SEVERITY_LABELS[f.severity]}`;
+    const fileLink = f.file ? `\`${f.file}:${f.line}\`` : 'N/A';
+    const desc = truncate(f.description, TABLE_DESCRIPTION_CHARS);
+    parts.push(`| ${sevLabel} | ${fileLink} | ${escapeMarkdownTable(f.title)} | ${escapeMarkdownTable(desc)} |`);
+  }
+  parts.push('');
+  return parts.join('\n');
+}
+
+/**
+ * All Findings + Agent Results + Strengths — the heavy tail of a run block.
+ * Kept only for the LATEST run: `run-history.ts` strips this wholesale when a
+ * block is demoted, which is what keeps a long-lived PR's description inside
+ * GitHub's 65,536-character body limit.
+ */
+export function formatFindingsDetail(
+  result: MergedReviewResult,
+  context: ReviewContext,
+): string {
+  const parts: string[] = [];
+
   if (result.totalFindings > 0) {
     parts.push('<details>');
     parts.push('<summary><strong>All Findings (' + result.totalFindings + ')</strong></summary>');
@@ -95,7 +193,6 @@ export function formatReviewComment(
     parts.push('');
   }
 
-  // JIRA context section
   if (context.jiraContext) {
     parts.push('<details>');
     parts.push('<summary><strong>JIRA Context</strong></summary>');
@@ -115,7 +212,6 @@ export function formatReviewComment(
     parts.push('');
   }
 
-  // Agent results summary
   parts.push('<details>');
   parts.push('<summary><strong>Agent Results</strong></summary>');
   parts.push('');
@@ -130,7 +226,6 @@ export function formatReviewComment(
   }
   parts.push('');
 
-  // Agent summaries
   for (const agent of result.agentResults) {
     if (agent.summary) {
       parts.push(`**${agent.agentName}:** ${agent.summary}`);
@@ -140,7 +235,6 @@ export function formatReviewComment(
   parts.push('</details>');
   parts.push('');
 
-  // Strengths section (from agent summaries that scored high)
   const strengths = extractStrengths(result.agentResults);
   if (strengths.length > 0) {
     parts.push('<details>');
@@ -153,20 +247,6 @@ export function formatReviewComment(
     parts.push('</details>');
     parts.push('');
   }
-
-  // Footer
-  if (config.commentFooter) {
-    parts.push('---');
-    parts.push(config.commentFooter);
-    parts.push('');
-  }
-
-  // Powered by
-  parts.push('---');
-  parts.push(
-    '<sub>Powered by [AI PR Review Action](https://github.com/sourcefuse/ai-pr-review-action) — automated code review with multi-agent AI</sub>',
-  );
-  parts.push('');
 
   return parts.join('\n');
 }

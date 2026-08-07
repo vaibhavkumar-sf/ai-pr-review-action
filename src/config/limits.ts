@@ -179,6 +179,30 @@ export const PROMPT_CLAMP_FLOOR_TOKENS = 2000;
 /** Per-file content cap for the cosmetic PR-description prompt, in chars. */
 export const DESCRIPTION_FILE_CHARS = 5000;
 
+// ─── PR description budget ──────────────────────────────────────────────────
+// The full review report (metrics + findings, one block per run) lives in the
+// PR description, so the body has to be actively budgeted or GitHub rejects the
+// update outright.
+
+/** GitHub's hard limit on a PR body. Exceeding it fails the update with 422. */
+export const PR_BODY_MAX_CHARS = 65536;
+
+/** Headroom under PR_BODY_MAX_CHARS, absorbing the delimiters and joins that
+ *  are added after the region is sized. */
+export const PR_BODY_SAFETY_MARGIN_CHARS = 2000;
+
+/** Ceiling on the AI narrative + diagrams together, so run history always has
+ *  room no matter how verbose a description the model returns. */
+export const DESCRIPTION_CONTENT_MAX_CHARS = 20000;
+
+/** Full run blocks kept before the oldest start degrading to one-line rows.
+ *  Only the latest keeps its findings detail, so 15 is comfortably affordable. */
+export const RUN_HISTORY_MAX_RUNS = 15;
+
+/** Cap on a single run's block. Past this its All Findings list is truncated —
+ *  one pathological run must not evict the entire history. */
+export const RUN_BLOCK_MAX_CHARS = 12000;
+
 /** Dependency-file content cap, in chars (avoids token bloat from large deps). */
 export const DEP_FILE_MAX_CHARS = 5000;
 

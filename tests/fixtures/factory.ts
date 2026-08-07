@@ -1,4 +1,5 @@
 import { ActionConfig, AgentResult, ChangedFile, Finding, MergedReviewResult, ReviewContext } from '../../src/types';
+import { RunActivityStats } from '../../src/results/backstage-reporter';
 import { getEnabledAgents } from '../../src/config/profiles';
 
 /**
@@ -41,6 +42,7 @@ export function makeConfig(overrides: Partial<ActionConfig> = {}): ActionConfig 
     enableBotCommentCleanup: true,
     maxFilesToReview: 50,
     excludePatterns: [],
+    botHidePatterns: [],
     includePatterns: [],
     relatedContext: 'full',
     enableContextTools: false,
@@ -175,6 +177,26 @@ export function makeMerged(overrides: Partial<MergedReviewResult> = {}): MergedR
     nitCount: findings.filter(f => f.severity === 'nit').length,
     passed: true,
     durationMs: 154000,
+    ...overrides,
+  };
+}
+
+/** A run's comment-lifecycle + AI-usage stats, as assembled by the orchestrator. */
+export function makeActivity(
+  overrides: Partial<RunActivityStats> = {},
+): RunActivityStats {
+  return {
+    inlineCommentsNew: 2,
+    inlineCommentsExisting: 1,
+    staleThreadsResolved: 1,
+    threadsReopened: 0,
+    repliesPosted: 0,
+    threadsResolvedFromReplies: 0,
+    botCommentsHidden: 3,
+    aiCalls: 4,
+    aiInputTokens: 12000,
+    aiOutputTokens: 3400,
+    estimatedCostUsd: 0.0182,
     ...overrides,
   };
 }

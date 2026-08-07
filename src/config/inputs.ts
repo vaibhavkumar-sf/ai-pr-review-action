@@ -3,7 +3,7 @@ import * as github from '@actions/github';
 import { ActionConfig, FailThreshold, Framework, RelatedContextMode, ReviewMode, ReviewProfile } from '../types';
 import { INPUTS, InputSpec } from './schema';
 import { ProfileMap, SpecialistCategory, getEnabledAgents } from './profiles';
-import { DEFAULT_EXCLUDE_PATTERNS } from './patterns';
+import { BOT_HIDE_ALL_PATTERNS, DEFAULT_EXCLUDE_PATTERNS } from './patterns';
 
 /**
  * Parses action inputs into an ActionConfig, driven by the schema registry.
@@ -199,6 +199,7 @@ export function parseActionInputs(): ActionConfig {
     maxFilesToReview: getNumber('max_files_to_review'),
     // User patterns are APPENDED to the built-in defaults, never replacing them
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS, ...userExcludes],
+    botHidePatterns: [...BOT_HIDE_ALL_PATTERNS, ...getCsv('bot_hide_patterns')],
     includePatterns: getCsv('include_patterns'),
     relatedContext: getEnum<RelatedContextMode>('related_context'),
     enableContextTools: getBoolean('enable_context_tools'),

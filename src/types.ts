@@ -166,6 +166,8 @@ export interface ActionConfig {
   enableBotCommentCleanup: boolean;
   maxFilesToReview: number;
   excludePatterns: string[];
+  /** Built-in noisy-bot phrases plus any the consumer added. */
+  botHidePatterns: string[];
   includePatterns: string[];
   relatedContext: RelatedContextMode;
   enableContextTools: boolean;

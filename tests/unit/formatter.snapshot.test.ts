@@ -1,29 +1,45 @@
-import { formatReviewComment, formatTrackingMetrics } from '../../src/results/formatter';
+import {
+  formatFullReportComment,
+  formatReviewComment,
+  formatTrackingMetrics,
+} from '../../src/results/formatter';
 import { makeAgentResult, makeConfig, makeContext, makeMerged } from '../fixtures/factory';
+import { makeActivity } from '../fixtures/factory';
 
 /**
- * Locks the exact markdown of the summary comment. The taxonomy/limits
- * refactor must not change a single rendered character (except the tracking
- * metrics regrouping, whose new layout is locked here once implemented).
+ * Locks the exact markdown of the summary comment. The full report now lives in
+ * the PR description (see run-history.test.ts); this comment is a stub whose
+ * job is to carry the completion marker and point at the description.
  */
 describe('formatReviewComment snapshot', () => {
-  it('renders the full summary comment for a combined-mode run', () => {
-    const merged = makeMerged();
-    const comment = formatReviewComment(merged, makeConfig(), makeContext());
+  it('renders the stub comment for a combined-mode first run', () => {
+    const comment = formatReviewComment(makeMerged(), makeConfig(), 1, false);
     expect(comment).toMatchSnapshot();
   });
 
-  it('suffixes the header with "— Re-run #N" when rerunNumber > 0', () => {
+  it('titles the header with the true run ordinal', () => {
     const merged = makeMerged();
-    const firstRun = formatReviewComment(merged, makeConfig(), makeContext(), 0);
-    const firstRerun = formatReviewComment(merged, makeConfig(), makeContext(), 1);
-    const secondRerun = formatReviewComment(merged, makeConfig(), makeContext(), 2);
-    expect(firstRun.split('\n')[0]).not.toMatch(/Re-run/);
-    expect(firstRerun.split('\n')[0]).toMatch(/AI Code Review — Re-run #1$/);
-    expect(secondRerun.split('\n')[0]).toMatch(/AI Code Review — Re-run #2$/);
+    expect(formatReviewComment(merged, makeConfig(), 1, false).split('\n')[0])
+      .toMatch(/AI Code Review — Run #1$/);
+    expect(formatReviewComment(merged, makeConfig(), 7, true).split('\n')[0])
+      .toMatch(/AI Code Review — Run #7$/);
   });
 
-  it('renders a passing zero-findings comment in separate mode', () => {
+  it('carries the re-run inline note only on re-runs', () => {
+    const merged = makeMerged();
+    expect(formatReviewComment(merged, makeConfig(), 1, false)).not.toContain('🔁 Re-run');
+    expect(formatReviewComment(merged, makeConfig(), 2, true)).toContain('🔁 Re-run');
+  });
+
+  it('keeps the report OUT of the comment — that is the description\'s job', () => {
+    const comment = formatReviewComment(makeMerged(), makeConfig(), 1, false);
+    expect(comment).not.toContain('Tracking Metrics');
+    expect(comment).not.toContain('All Findings');
+    expect(comment).not.toContain('Agent Results');
+    expect(comment).toContain('is in the **PR description**');
+  });
+
+  it('renders a passing zero-findings stub in separate mode', () => {
     const merged = makeMerged({
       findings: [],
       agentResults: [
@@ -34,33 +50,30 @@ describe('formatReviewComment snapshot', () => {
     const comment = formatReviewComment(
       merged,
       makeConfig({ reviewMode: 'separate', commentFooter: 'Custom footer' }),
-      makeContext({ jiraContext: null }),
+      1,
+      false,
     );
     expect(comment).toMatchSnapshot();
   });
+});
 
-  it('renders the final comment with the activity + AI-usage groups at the top', () => {
-    const merged = makeMerged();
-    const comment = formatReviewComment(merged, makeConfig(), makeContext(), 0, {
-      inlineCommentsNew: 2,
-      inlineCommentsExisting: 1,
-      staleThreadsResolved: 1,
-      threadsReopened: 0,
-      repliesPosted: 0,
-      threadsResolvedFromReplies: 0,
-      botCommentsHidden: 3,
-      aiCalls: 4,
-      aiInputTokens: 12000,
-      aiOutputTokens: 3400,
-      estimatedCostUsd: 0.0182,
-    });
-    // Metrics precede the findings — the header/meta line, then the metrics
-    // block, before any Critical & High or All Findings section.
-    expect(comment.indexOf('### 📊 Tracking Metrics')).toBeLessThan(comment.indexOf('Critical & High'));
+/**
+ * The fallback path: only reached when writing the PR description failed. It
+ * must contain the whole report, because otherwise that run produced a review
+ * nobody can read.
+ */
+describe('formatFullReportComment', () => {
+  it('carries the entire report plus an explanation of why it is here', () => {
+    const comment = formatFullReportComment(
+      makeMerged(), makeConfig(), makeContext(), makeActivity(), 3, false,
+    );
+    expect(comment).toContain('The PR description could not be updated');
+    expect(comment).toContain('### 📊 Tracking Metrics');
     expect(comment).toContain('#### Review Activity (this run)');
-    expect(comment).toContain('#### AI Usage (this run)');
-    expect(comment).not.toContain('### Summary');
-    expect(comment).not.toContain('Architecture Diagram');
+    expect(comment).toContain('All Findings');
+    expect(comment).toContain('Agent Results');
+    expect(comment).toContain('AI Code Review — Run #3');
+    expect(comment.indexOf('### 📊 Tracking Metrics')).toBeLessThan(comment.indexOf('Critical & High'));
     expect(comment).toMatchSnapshot();
   });
 });

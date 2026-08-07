@@ -22,7 +22,10 @@ jest.mock('@actions/core', () => ({
 }));
 
 jest.mock('../../src/pipeline/description-updater', () => ({
-  appendToPRDescription: jest.fn().mockResolvedValue(undefined),
+  generateDescriptionContent: jest.fn().mockResolvedValue({ narrative: 'n', diagrams: '' }),
+  writePRDescription: jest.fn().mockResolvedValue(undefined),
+  resolveRunNumber: jest.fn().mockImplementation((_o, _c, rerunNumber: number) =>
+    Promise.resolve(rerunNumber + 1)),
 }));
 
 jest.mock('../../src/context', () => ({ gatherAllContext: jest.fn() }));
@@ -75,7 +78,8 @@ import { createAgents } from '../../src/agents';
 const providerMock = jest.requireMock('../../src/providers/provider-factory').__provider;
 const commenter = jest.requireMock('../../src/github/pr-commenter').__instance;
 const inlineReviewer = jest.requireMock('../../src/github/inline-reviewer').__instance;
-const { appendToPRDescription } = jest.requireMock('../../src/pipeline/description-updater');
+const { generateDescriptionContent, writePRDescription } =
+  jest.requireMock('../../src/pipeline/description-updater');
 
 function output(key: string): unknown {
   const call = (core.setOutput as jest.Mock).mock.calls.find(c => c[0] === key);
@@ -125,10 +129,46 @@ describe('runReview pipeline (integration)', () => {
     expect(output('total_findings')).toBe(4);
     expect(output('critical_count')).toBe(1);
 
-    // The final review comment (real formatter output) reached the PR.
+    // The findings go to the PR description, not the comment.
+    const merged = (writePRDescription as jest.Mock).mock.calls[0][2] as { findings: Array<{ title: string }> };
+    expect(merged.findings.some(f => f.title.includes('SQL injection'))).toBe(true);
+
+    // The comment is the stub that points at it, and carries the marker.
     const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(posted.some((c: string) => c.includes('SQL injection'))).toBe(true);
+    const finalPost = posted[posted.length - 1];
+    expect(finalPost).toContain('is in the **PR description**');
+    expect(finalPost).toContain('<!-- ai-pr-review-complete -->');
+    expect(finalPost).not.toContain('SQL injection');
     expect(core.setFailed).not.toHaveBeenCalled();
+  });
+
+  it('sweeps bot comments twice — at startup and again after the review', async () => {
+    (gatherAllContext as jest.Mock).mockResolvedValue(makeContext());
+    commenter.cleanupBotComments.mockResolvedValueOnce(2).mockResolvedValueOnce(3);
+
+    await expect(runReview(baseConfig())).resolves.toBeUndefined();
+
+    // Twice, because other CI bots comment DURING our multi-minute run and
+    // would otherwise wait for the next review to be collapsed.
+    expect(commenter.cleanupBotComments).toHaveBeenCalledTimes(2);
+    // Both sweeps count toward the reported total.
+    expect(output('bot_comments_hidden')).toBe(5);
+  });
+
+  it('falls back to the full-report comment when the description write fails', async () => {
+    (gatherAllContext as jest.Mock).mockResolvedValue(makeContext());
+    (writePRDescription as jest.Mock).mockRejectedValueOnce(new Error('body too large'));
+
+    await expect(runReview(baseConfig())).resolves.toBeUndefined();
+
+    // The description now holds the only copy of the report, so a failed write
+    // must not leave a review with nothing to read.
+    const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
+    const finalPost = posted[posted.length - 1];
+    expect(finalPost).toContain('The PR description could not be updated');
+    expect(finalPost).toContain('SQL injection');
+    expect(finalPost).toContain('<!-- ai-pr-review-complete -->');
+    expect(output('review_status')).toBe('completed');
   });
 
   it('re-run: inlines only critical/high, reopens regressed threads, keeps the description', async () => {
@@ -152,17 +192,23 @@ describe('runReview pipeline (integration)', () => {
     expect(commenter.reopenRegressedThreads).toHaveBeenCalledTimes(1);
     expect(output('threads_reopened')).toBe(1);
 
-    // The description updater was told this is a re-run (it keeps the old body).
-    expect((appendToPRDescription as jest.Mock).mock.calls[0][5]).toBe(true);
+    // Both description phases were told this is a re-run: the AI content is
+    // reused, and the run block records the re-run inline policy.
+    expect((generateDescriptionContent as jest.Mock).mock.calls[0][5]).toBe(true);
+    expect((writePRDescription as jest.Mock).mock.calls[0][7]).toBe(true);
 
-    // Summary totals still count ALL severities, and the completion marker +
-    // re-run note are embedded for the next run.
+    // Summary totals still count ALL severities, and the completion marker is
+    // embedded for the next run.
     expect(output('total_findings')).toBe(4);
     const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
     const finalPost = posted[posted.length - 1];
     expect(finalPost).toContain('<!-- ai-pr-review-complete -->');
-    expect(finalPost).toContain('Re-run focus');
-    expect(finalPost).toContain('AI Code Review — Re-run #2');
+    expect(finalPost).toContain('Re-run:');
+    // rerunNumber 2 means this is the 3rd run of the PR.
+    expect(finalPost).toContain('AI Code Review — Run #3');
+    // The report itself moved to the description — the comment is a stub.
+    expect(finalPost).toContain('is in the **PR description**');
+    expect(finalPost).not.toContain('Tracking Metrics');
   });
 
   it('first run: inlines every severity and never calls the reopen path', async () => {
@@ -176,7 +222,8 @@ describe('runReview pipeline (integration)', () => {
     const inlined = inlineReviewer.postReview.mock.calls[0][0] as Array<{ severity: string }>;
     expect(inlined.map(f => f.severity).sort()).toEqual(['critical', 'high', 'low', 'medium']);
     expect(commenter.reopenRegressedThreads).not.toHaveBeenCalled();
-    expect((appendToPRDescription as jest.Mock).mock.calls[0][5]).toBe(false);
+    expect((generateDescriptionContent as jest.Mock).mock.calls[0][5]).toBe(false);
+    expect((writePRDescription as jest.Mock).mock.calls[0][7]).toBe(false);
     // Completion marker still embedded so the NEXT run detects a re-run.
     const posted: string[] = commenter.postOrUpdateComment.mock.calls.map((c: unknown[]) => c[0] as string);
     expect(posted[posted.length - 1]).toContain('<!-- ai-pr-review-complete -->');
