@@ -199,9 +199,18 @@ export const DESCRIPTION_CONTENT_MAX_CHARS = 20000;
  *  Only the latest keeps its findings detail, so 15 is comfortably affordable. */
 export const RUN_HISTORY_MAX_RUNS = 15;
 
-/** Cap on a single run's block. Past this its All Findings list is truncated —
- *  one pathological run must not evict the entire history. */
-export const RUN_BLOCK_MAX_CHARS = 12000;
+/**
+ * Row cap on a run block's Critical & High table. That table sits OUTSIDE the
+ * collapsible detail section (it is the part worth keeping when a run is
+ * demoted), so nothing else bounds it — an unlucky run with hundreds of high
+ * findings would put a ~90k table into every historical block.
+ */
+export const SEVERE_TABLE_MAX_ROWS = 25;
+
+// NOTE: there is deliberately no per-block size constant. Whether a run keeps
+// its findings detail is decided against the REMAINING body budget in
+// run-history.ts, not a fixed number — a constant here truncated ordinary
+// 16-finding runs that had ~50k of body budget still unused.
 
 /** Dependency-file content cap, in chars (avoids token bloat from large deps). */
 export const DEP_FILE_MAX_CHARS = 5000;

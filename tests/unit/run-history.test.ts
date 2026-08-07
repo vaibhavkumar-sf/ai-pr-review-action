@@ -206,17 +206,67 @@ describe('the degradation ladder', () => {
     expect(body).toContain('Older runs trimmed to fit');
   });
 
-  it('tier 4: a single pathological run still produces a valid, bounded block', () => {
+  /**
+   * REGRESSION. An earlier version capped each block at a fixed 12,000 chars at
+   * render time, so an ordinary 16-finding run lost its entire findings list
+   * while ~50k of body budget sat unused. Caught in a live run, not by a unit
+   * test — hence this one. Keeping the CURRENT run's findings is the single
+   * most valuable thing the section does.
+   */
+  it('keeps the findings of a normal-sized run instead of truncating it', () => {
+    const realistic = makeMerged({
+      findings: Array.from({ length: 16 }, (_, i) =>
+        makeFinding({
+          line: i + 1,
+          title: `Finding number ${i}`,
+          description: 'x'.repeat(600),
+          suggestion: 'z'.repeat(200),
+        })),
+    });
+    const md = renderRunBlock(1, realistic, makeConfig(), makeContext(), makeActivity(), false, AT);
+    const section = buildRunsSection(md, '', 2000);
+
+    expect(md.length).toBeGreaterThan(12000);       // would have tripped the old cap
+    expect(section).not.toContain('Findings detail omitted');
+    expect(section).toContain('All Findings (16)');
+    expect(section).toContain('Finding number 15');
+  });
+
+  it('tier 4: truncates the latest block ONLY when it cannot fit even alone', () => {
     const huge = makeMerged({
       findings: Array.from({ length: 500 }, (_, i) =>
         makeFinding({ line: i + 1, title: `Finding ${i}`, description: 'y'.repeat(500) })),
     });
     const md = renderRunBlock(1, huge, makeConfig(), makeContext(), makeActivity(), false, AT);
+    const section = buildRunsSection(md, '', 0);
 
-    expect(md).toContain('Findings detail omitted');
-    expect(md).toContain('### 📊 Tracking Metrics');
+    expect(md).not.toContain('Findings detail omitted');   // render stays faithful
+    expect(section).toContain('Findings detail omitted');  // the budget decides
+    expect(section).toContain('### 📊 Tracking Metrics');
+    expect(section.length).toBeLessThan(PR_BODY_MAX_CHARS);
     // Still a well-formed block the next run can parse and carry forward.
-    expect(parseRunBlocks(bodyWith(buildRunsSection(md, '', 0)))).toHaveLength(1);
+    expect(parseRunBlocks(bodyWith(section))).toHaveLength(1);
+  });
+
+  it('history is sacrificed before the current run’s findings are', () => {
+    const fat = (): ReturnType<typeof makeMerged> => makeMerged({
+      findings: Array.from({ length: 20 }, (_, i) =>
+        makeFinding({ line: i + 1, title: `F${i}`, description: 'x'.repeat(700) })),
+    });
+
+    let body = '';
+    for (let run = 1; run <= 10; run++) {
+      body = bodyWith(buildRunsSection(
+        renderRunBlock(run, fat(), makeConfig(), makeContext(), makeActivity(), run > 1, AT),
+        body,
+        1000,
+      ));
+    }
+
+    // The newest run kept its findings; older runs paid the price instead.
+    expect(body).toContain('All Findings (20)');
+    expect(body).not.toContain('Findings detail omitted');
+    expect(body.length).toBeLessThan(PR_BODY_MAX_CHARS);
   });
 
   it('a corrupt region is discarded, and content outside it is untouched', () => {

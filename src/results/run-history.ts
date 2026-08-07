@@ -31,7 +31,6 @@ import {
 import {
   PR_BODY_MAX_CHARS,
   PR_BODY_SAFETY_MARGIN_CHARS,
-  RUN_BLOCK_MAX_CHARS,
   RUN_HISTORY_MAX_RUNS,
 } from '../config/limits';
 
@@ -124,8 +123,11 @@ export function renderRunBlock(
   parts.push(DETAIL_END);
   parts.push('</details>');
 
-  const block = parts.join('\n');
-  return block.length > RUN_BLOCK_MAX_CHARS ? truncateBlockDetail(block, config) : block;
+  // Rendered in full, deliberately. Whether the findings detail survives is a
+  // BUDGET decision, not a fixed-size one, and only buildRunsSection knows the
+  // budget — an earlier version capped the block here at a constant and stripped
+  // the findings off ordinary 16-finding runs that had ~50k of room to spare.
+  return parts.join('\n');
 }
 
 /**
@@ -211,15 +213,20 @@ function demoteBlock(block: RunBlock): RunBlock {
   return { ...block, markdown: markdown.replace(/\n{3,}/g, '\n\n') };
 }
 
-/** Last-resort trim when a single run's block busts the per-block cap. */
-function truncateBlockDetail(block: string, config: ActionConfig): string {
+/**
+ * Tier 4, the genuine last resort: the latest run's block does not fit even
+ * with ALL history dropped. Only then is it acceptable to lose this run's
+ * findings, and the reader is pointed at the workflow run for them.
+ */
+function truncateBlockDetail(block: string): string {
   const start = block.indexOf(DETAIL_START);
   const end = block.indexOf(DETAIL_END);
   if (start < 0 || end <= start) return block;
   const server = process.env.GITHUB_SERVER_URL || 'https://github.com';
+  const repo = process.env.GITHUB_REPOSITORY;
   const runId = process.env.GITHUB_RUN_ID;
-  const where = runId
-    ? `See the [workflow run](${server}/${config.owner}/${config.repo}/actions/runs/${runId}).`
+  const where = repo && runId
+    ? `See the [workflow run](${server}/${repo}/actions/runs/${runId}).`
     : 'See the workflow run logs.';
   return (
     block.slice(0, start) +
@@ -348,6 +355,13 @@ export function buildRunsSection(
     rows = rows.slice(0, -1);
     note = `<sub>Older runs trimmed to fit GitHub's ${PR_BODY_MAX_CHARS.toLocaleString('en-US')}-character PR body limit.</sub>`;
     section = assemble(full, rows, note);
+  }
+
+  // Tier 4: even alone, this run's block does not fit. Losing the current
+  // findings is the worst outcome available, so it happens only here — after
+  // every scrap of history has already been given up.
+  if (section.length > budget) {
+    section = assemble([], [], note).replace(newBlockMarkdown, truncateBlockDetail(newBlockMarkdown));
   }
 
   return [RUNS_HEADING, '', RUNS_REGION_START, section, RUNS_REGION_END].join('\n');

@@ -6,7 +6,7 @@ import {
   SEVERITY_LABELS,
   SPECIALIST_CATEGORY_IDS,
 } from '../config/taxonomy';
-import { STRENGTHS_MIN_SCORE, TABLE_DESCRIPTION_CHARS } from '../config/limits';
+import { SEVERE_TABLE_MAX_ROWS, STRENGTHS_MIN_SCORE, TABLE_DESCRIPTION_CHARS } from '../config/limits';
 import { formatDuration } from '../utils/text';
 
 /**
@@ -137,16 +137,27 @@ export function formatSevereFindingsTable(result: MergedReviewResult): string {
   const severeFindings = result.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
   if (severeFindings.length === 0) return '';
 
+  // Row-capped because this table lives OUTSIDE the collapsible detail section
+  // and therefore survives demotion — nothing else bounds it, and a run with
+  // hundreds of high findings would otherwise put a huge table into every
+  // historical block. Overflow is stated, never silent.
+  const shown = severeFindings.slice(0, SEVERE_TABLE_MAX_ROWS);
+  const hidden = severeFindings.length - shown.length;
+
   const parts: string[] = [];
   parts.push('**Critical & High Issues**');
   parts.push('');
   parts.push('| Severity | File | Title | Description |');
   parts.push('|----------|------|-------|-------------|');
-  for (const f of severeFindings) {
+  for (const f of shown) {
     const sevLabel = `${SEVERITY_ICONS[f.severity]} ${SEVERITY_LABELS[f.severity]}`;
     const fileLink = f.file ? `\`${f.file}:${f.line}\`` : 'N/A';
     const desc = truncate(f.description, TABLE_DESCRIPTION_CHARS);
     parts.push(`| ${sevLabel} | ${fileLink} | ${escapeMarkdownTable(f.title)} | ${escapeMarkdownTable(desc)} |`);
+  }
+  if (hidden > 0) {
+    parts.push('');
+    parts.push(`<sub>+ ${hidden} more critical/high finding${hidden === 1 ? '' : 's'} — see All Findings below.</sub>`);
   }
   parts.push('');
   return parts.join('\n');
